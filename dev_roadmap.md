@@ -13,7 +13,7 @@ the build is broken or type-check fails.
 retrieved from the X API and article crawler. Every tool call that returns content
 automatically saves it to the database. New query tools expose the saved data.
 
-**Database:** SQLite via `better-sqlite3`, stored at `W:\x_posts_db\x-data.db`.
+**Database:** SQLite via `better-sqlite3`, stored at `~/.x-api-mcp/x-data.db` by default (overridable via `X_API_DB_PATH`).
 
 **Key design decisions:**
 - Upsert pattern (`INSERT OR REPLACE`) — safe to refetch the same tweet
@@ -125,7 +125,7 @@ automatically saves it to the database. New query tools expose the saved data.
 
 **Key deliverables:**
 - `package.json` — `better-sqlite3` and `@types/better-sqlite3` added as dependencies
-- `db/connection.ts` — exports a lazy singleton `getDb()` returning a `Database` instance backed by `W:\x_posts_db\x-data.db`
+- `db/connection.ts` — exports a lazy singleton `getDb()` returning a `Database` instance backed by `~/.x-api-mcp/x-data.db` (default, overridable via `X_API_DB_PATH`)
 - `db/schema.ts` — exports `initSchema(db)` which creates the `tweets`, `users`, `articles`, `media`, and `schema_version` tables with `IF NOT EXISTS`
 - `db/types.ts` — exports `TweetRow`, `UserRow`, `ArticleRow`, `MediaRow` interfaces
 - `server.ts` — calls `initSchema(getDb())` before `server.connect(transport)` so the DB is ready before any tool can run
@@ -192,7 +192,7 @@ automatically saves it to the database. New query tools expose the saved data.
 
 **Key deliverables:**
 - All 15 DB call sites (Phases 2-4) verified to have try/catch wrapping
-- `server.ts` startup logs DB path and row counts: `x-api: DB ready at W:\x_posts_db\x-data.db (tweets: N, articles: N)`
+- `server.ts` startup logs DB path and row counts: `x-api: DB ready at <db-path> (tweets: N, articles: N)`
 - `tsc --noEmit` passes with zero errors across the entire project
 
 ---

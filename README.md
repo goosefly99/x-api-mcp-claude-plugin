@@ -48,8 +48,9 @@ The server requires the following environment variables (checked at startup):
 Optional:
 
 - `X_API_DB_PATH` — absolute path to the SQLite database file. Defaults to
-  `W:\x_posts_db\x-data.db`; override to use a platform-appropriate location
-  (e.g. `~/.x-api-mcp/x-data.db`).
+  `~/.x-api-mcp/x-data.db` (resolved against the current user's home
+  directory). The default directory is created automatically on first use.
+  If you set a custom path, the parent directory must already exist.
 
 Set these via your shell environment or a local `.env` file (ignored by git).
 
@@ -63,7 +64,3 @@ and should never be committed.
   operational notes.
 - [`dev_roadmap.md`](./dev_roadmap.md) — development roadmap and planned
   features.
-
-## License
-
-MIT — see [`LICENSE`](./LICENSE) for the full text.
