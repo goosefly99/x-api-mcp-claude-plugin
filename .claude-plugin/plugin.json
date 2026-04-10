@@ -1,0 +1,10 @@
+{
+  "name": "x-api-mcp",
+  "description": "X (Twitter) API MCP server — authenticated crawler, client, and query tools",
+  "version": "0.0.1",
+  "author": { "name": "olive" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/goosefly99/x-api-mcp-claude-plugin.git"
+  }
+}

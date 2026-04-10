@@ -1,0 +1,39 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+.x-tokens.json
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+
+# Build / cache artifacts
+coverage/
+.nyc_output/
+*.tsbuildinfo
+.cache/
+dist/
+build/
+
+# Runtime pipeline data
+pipeline_mcp_data/
+
+# SQLite runtime DBs (db/ contains only source files; runtime DB lives outside repo)
+db/*.sqlite
+db/*.sqlite-journal
+db/*.db
+db/*.db-journal
+*.sqlite
+*.sqlite-journal
