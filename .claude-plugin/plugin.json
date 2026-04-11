@@ -1,5 +1,5 @@
 {
-  "name": "x-api-mcp",
+  "name": "x-api-mcp-auto-dev",
   "description": "X (Twitter) API MCP server — authenticated crawler, client, and query tools",
   "version": "0.0.1",
   "author": { "name": "olive" },
