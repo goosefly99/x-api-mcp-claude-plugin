@@ -121,4 +121,19 @@ export function runMigrations(db: Database.Database): void {
       new Date().toISOString()
     )
   }
+
+  if (currentVersion < 4) {
+    // v4: add article_crawl_status column for auto-crawl bookkeeping.
+    // Status values: 'pending' | 'ok' | 'missing' | 'failed'.
+    try {
+      db.exec('ALTER TABLE tweets ADD COLUMN article_crawl_status TEXT')
+    } catch {
+      // column already exists — safe to ignore
+    }
+
+    db.prepare('INSERT INTO schema_version (version, applied_at) VALUES (?, ?)').run(
+      4,
+      new Date().toISOString()
+    )
+  }
 }

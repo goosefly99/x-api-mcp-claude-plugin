@@ -28,6 +28,8 @@ export interface TweetRow {
   projects_json: string | null
   // v3
   is_article: number | null
+  // v4
+  article_crawl_status: string | null
 }
 
 export interface UserRow {

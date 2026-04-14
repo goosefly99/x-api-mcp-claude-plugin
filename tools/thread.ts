@@ -2,12 +2,14 @@ import { xApiRequest, formatTweet, TWEET_FIELDS, USER_FIELDS, EXPANSIONS, MEDIA_
 import type { XTweet } from '../types.ts'
 import { getDb } from '../db/connection.ts'
 import { upsertTweets } from '../db/repos/tweets.ts'
+import { resolveArticlesForTweets, formatArticleLine, type ArticleResolution } from '../services/auto-crawl.ts'
 
 export async function handleGetThread(args: Record<string, unknown>) {
   const tweetId = args.tweet_id as string
   if (!tweetId) throw new Error('tweet_id is required')
 
   const maxResults = Math.max(10, Math.min(100, Number(args.max_results) || 50))
+  const autoCrawl = args.auto_crawl_articles !== false
 
   const params: Record<string, string | undefined> = {
     'tweet.fields': TWEET_FIELDS,
@@ -114,16 +116,36 @@ export async function handleGetThread(args: Record<string, unknown>) {
     return dateA - dateB
   })
 
-  // Step 5: Persist to DB
+  // Step 5: Resolve articles BEFORE persisting so article_crawl_status
+  // lands in the same transaction as the tweet rows.
+  const db = getDb()
+  let articleMap = new Map<string, ArticleResolution>()
+  if (autoCrawl) {
+    try {
+      articleMap = await resolveArticlesForTweets(db, allTweets)
+    } catch (err) {
+      process.stderr.write(`x-api: auto-crawl failed (thread): ${err}\n`)
+    }
+  }
+
+  const statusMap = new Map<string, string>()
+  for (const [id, res] of articleMap) statusMap.set(id, res.status)
+
+  // Persist to DB
   try {
-    upsertTweets(getDb(), allTweets, mergedIncludes, 'thread')
+    upsertTweets(db, allTweets, mergedIncludes, 'thread', statusMap)
   } catch (err) {
     process.stderr.write(`x-api: DB save failed (thread): ${err}\n`)
   }
 
   // Step 6: Format output
   const formatted = allTweets
-    .map((t) => formatTweet(t, mergedIncludes))
+    .map((t) => {
+      const line = articleMap.has(t.id)
+        ? `\n${formatArticleLine(articleMap.get(t.id)!)}`
+        : ''
+      return `${formatTweet(t, mergedIncludes)}${line}`
+    })
     .join('\n\n')
 
   const note = allTweets.length < (threadResponse.meta?.result_count ?? 0)

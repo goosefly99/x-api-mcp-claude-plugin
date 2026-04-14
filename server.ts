@@ -69,6 +69,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             description: 'Pagination token from a previous response',
           },
+          auto_crawl_articles: {
+            type: 'boolean',
+            description:
+              'When true (default), automatically crawl any article URL linked by a tweet ' +
+              'and store it in the articles table. Each tweet gets a per-call status ' +
+              "(ok | missing | failed). Set to false to skip crawling.",
+            default: true,
+          },
         },
       },
     },
@@ -94,6 +102,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             description: 'Pagination token from a previous response',
           },
+          auto_crawl_articles: {
+            type: 'boolean',
+            description:
+              'When true (default), automatically crawl any article URL linked by a tweet ' +
+              'and store it in the articles table. Set to false to skip crawling.',
+            default: true,
+          },
         },
         required: ['query'],
       },
@@ -108,6 +123,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           tweet_id: {
             type: 'string',
             description: 'The tweet ID to look up',
+          },
+          auto_crawl_articles: {
+            type: 'boolean',
+            description:
+              'When true (default), automatically crawl any article URL linked by the tweet ' +
+              'and store it in the articles table. Set to false to skip crawling.',
+            default: true,
           },
         },
         required: ['tweet_id'],
@@ -133,6 +155,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           next_token: {
             type: 'string',
             description: 'Pagination token from a previous response',
+          },
+          auto_crawl_articles: {
+            type: 'boolean',
+            description:
+              'When true (default), automatically crawl any article URL linked by a tweet ' +
+              'and store it in the articles table. Set to false to skip crawling.',
+            default: true,
           },
         },
         required: ['user_id'],
@@ -169,6 +198,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             description: 'Maximum replies to fetch (10-100, default 50)',
             minimum: 10,
             maximum: 100,
+          },
+          auto_crawl_articles: {
+            type: 'boolean',
+            description:
+              'When true (default), automatically crawl any article URL linked by a tweet ' +
+              'and store it in the articles table. Set to false to skip crawling.',
+            default: true,
           },
         },
         required: ['tweet_id'],

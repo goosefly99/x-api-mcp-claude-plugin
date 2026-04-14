@@ -10,5 +10,5 @@
     "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "include": ["*.ts", "tools/*.ts", "db/*.ts", "db/repos/*.ts", "scripts/*.ts"]
+  "include": ["*.ts", "tools/*.ts", "db/*.ts", "db/repos/*.ts", "scripts/*.ts", "services/*.ts"]
 }

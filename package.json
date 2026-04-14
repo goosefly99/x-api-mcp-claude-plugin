@@ -5,7 +5,8 @@
   "type": "module",
   "bin": "./server.ts",
   "scripts": {
-    "start": "node server.ts"
+    "start": "node server.ts",
+    "build": "tsc --noEmit"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

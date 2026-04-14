@@ -2,10 +2,13 @@ import { xApiRequest, formatTweet, TWEET_FIELDS, USER_FIELDS, EXPANSIONS, MEDIA_
 import type { XTweet } from '../types.ts'
 import { getDb } from '../db/connection.ts'
 import { upsertTweets } from '../db/repos/tweets.ts'
+import { resolveArticlesForTweets, formatArticleLine, type ArticleResolution } from '../services/auto-crawl.ts'
 
 export async function handleGetTweet(args: Record<string, unknown>) {
   const tweetId = args.tweet_id as string
   if (!tweetId) throw new Error('tweet_id is required')
+
+  const autoCrawl = args.auto_crawl_articles !== false
 
   const { response, rateLimit } = await xApiRequest<XTweet>(
     `tweets/${encodeURIComponent(tweetId)}`,
@@ -24,17 +27,35 @@ export async function handleGetTweet(args: Record<string, unknown>) {
     }
   }
 
+  // Resolve articles BEFORE persisting so article_crawl_status lands in
+  // the same transaction as the tweet row.
+  const db = getDb()
+  let articleMap = new Map<string, ArticleResolution>()
+  if (autoCrawl) {
+    try {
+      articleMap = await resolveArticlesForTweets(db, [response.data])
+    } catch (err) {
+      process.stderr.write(`x-api: auto-crawl failed (get_tweet): ${err}\n`)
+    }
+  }
+
+  const statusMap = new Map<string, string>()
+  for (const [id, res] of articleMap) statusMap.set(id, res.status)
+
   try {
-    upsertTweets(getDb(), [response.data], response.includes, 'get_tweet')
+    upsertTweets(db, [response.data], response.includes, 'get_tweet', statusMap)
   } catch (err) {
     process.stderr.write(`x-api: DB save failed (get_tweet): ${err}\n`)
   }
 
   const formatted = formatTweet(response.data, response.includes)
+  const articleLine = articleMap.has(response.data.id)
+    ? `\n${formatArticleLine(articleMap.get(response.data.id)!)}`
+    : ''
   const rateLimitInfo = `\n\n[Rate limit: ${rateLimit.remaining}/${rateLimit.limit} remaining]`
 
   return {
-    content: [{ type: 'text' as const, text: `${formatted}${rateLimitInfo}` }],
+    content: [{ type: 'text' as const, text: `${formatted}${articleLine}${rateLimitInfo}` }],
   }
 }
 
@@ -44,6 +65,7 @@ export async function handleGetUserTweets(args: Record<string, unknown>) {
 
   const maxResults = Math.max(5, Math.min(100, Number(args.max_results) || 10))
   const nextToken = args.next_token as string | undefined
+  const autoCrawl = args.auto_crawl_articles !== false
 
   // Note: user tweets endpoint uses pagination_token, not next_token
   const params: Record<string, string | undefined> = {
@@ -67,13 +89,33 @@ export async function handleGetUserTweets(args: Record<string, unknown>) {
     }
   }
 
+  const db = getDb()
+  let articleMap = new Map<string, ArticleResolution>()
+  if (autoCrawl) {
+    try {
+      articleMap = await resolveArticlesForTweets(db, response.data)
+    } catch (err) {
+      process.stderr.write(`x-api: auto-crawl failed (user_tweets): ${err}\n`)
+    }
+  }
+
+  const statusMap = new Map<string, string>()
+  for (const [id, res] of articleMap) statusMap.set(id, res.status)
+
   try {
-    upsertTweets(getDb(), response.data, response.includes, 'user_tweets')
+    upsertTweets(db, response.data, response.includes, 'user_tweets', statusMap)
   } catch (err) {
     process.stderr.write(`x-api: DB save failed (user_tweets): ${err}\n`)
   }
 
-  const formatted = response.data.map((t) => formatTweet(t, response.includes)).join('\n\n')
+  const formatted = response.data
+    .map((t) => {
+      const line = articleMap.has(t.id)
+        ? `\n${formatArticleLine(articleMap.get(t.id)!)}`
+        : ''
+      return `${formatTweet(t, response.includes)}${line}`
+    })
+    .join('\n\n')
   const pagination = response.meta?.next_token
     ? `\n\n--- More tweets available. Use next_token: "${response.meta.next_token}" ---`
     : ''

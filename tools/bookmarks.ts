@@ -2,6 +2,7 @@ import { xApiRequest, formatTweet, TWEET_FIELDS, USER_FIELDS, EXPANSIONS, MEDIA_
 import type { XTweet, XUser } from '../types.ts'
 import { getDb } from '../db/connection.ts'
 import { upsertTweets } from '../db/repos/tweets.ts'
+import { resolveArticlesForTweets, formatArticleLine, type ArticleResolution } from '../services/auto-crawl.ts'
 
 let cachedUserId: string | null = null
 
@@ -18,6 +19,7 @@ async function getAuthenticatedUserId(): Promise<string> {
 export async function handleGetBookmarks(args: Record<string, unknown>) {
   const maxResults = Math.max(1, Math.min(100, Number(args.max_results) || 20))
   const nextToken = args.next_token as string | undefined
+  const autoCrawl = args.auto_crawl_articles !== false
 
   const userId = await getAuthenticatedUserId()
 
@@ -43,13 +45,33 @@ export async function handleGetBookmarks(args: Record<string, unknown>) {
     }
   }
 
+  const db = getDb()
+  let articleMap = new Map<string, ArticleResolution>()
+  if (autoCrawl) {
+    try {
+      articleMap = await resolveArticlesForTweets(db, response.data)
+    } catch (err) {
+      process.stderr.write(`x-api: auto-crawl failed (bookmarks): ${err}\n`)
+    }
+  }
+
+  const statusMap = new Map<string, string>()
+  for (const [id, res] of articleMap) statusMap.set(id, res.status)
+
   try {
-    upsertTweets(getDb(), response.data, response.includes, 'bookmarks')
+    upsertTweets(db, response.data, response.includes, 'bookmarks', statusMap)
   } catch (err) {
     process.stderr.write(`x-api: DB save failed (bookmarks): ${err}\n`)
   }
 
-  const formatted = response.data.map((t) => formatTweet(t, response.includes)).join('\n\n')
+  const formatted = response.data
+    .map((t) => {
+      const line = articleMap.has(t.id)
+        ? `\n${formatArticleLine(articleMap.get(t.id)!)}`
+        : ''
+      return `${formatTweet(t, response.includes)}${line}`
+    })
+    .join('\n\n')
   const pagination = response.meta?.next_token
     ? `\n\n--- More bookmarks available. Use next_token: "${response.meta.next_token}" ---`
     : ''

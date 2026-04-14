@@ -15,19 +15,45 @@ export interface QueryTweetsOpts {
 
 /**
  * Upserts a single tweet row.
+ *
+ * Uses INSERT … ON CONFLICT so that a later overwrite can't clobber
+ * previously populated article_crawl_status with NULL — we COALESCE
+ * the new value with the existing row value.
  */
-export function upsertTweet(db: Database.Database, tweet: XTweet, source: string): void {
+export function upsertTweet(
+  db: Database.Database,
+  tweet: XTweet,
+  source: string,
+  articleCrawlStatus: string | null = null,
+): void {
   const m = tweet.public_metrics
   db.prepare(`
-    INSERT OR REPLACE INTO tweets (
+    INSERT INTO tweets (
       id, text, note_tweet_text, author_id, conversation_id, created_at,
       retweet_count, reply_count, like_count, quote_count, impression_count, bookmark_count,
-      entities_json, referenced_tweets_json, saved_at, source
+      entities_json, referenced_tweets_json, saved_at, source, article_crawl_status
     ) VALUES (
       @id, @text, @note_tweet_text, @author_id, @conversation_id, @created_at,
       @retweet_count, @reply_count, @like_count, @quote_count, @impression_count, @bookmark_count,
-      @entities_json, @referenced_tweets_json, @saved_at, @source
+      @entities_json, @referenced_tweets_json, @saved_at, @source, @article_crawl_status
     )
+    ON CONFLICT(id) DO UPDATE SET
+      text                   = excluded.text,
+      note_tweet_text        = excluded.note_tweet_text,
+      author_id              = excluded.author_id,
+      conversation_id        = excluded.conversation_id,
+      created_at             = excluded.created_at,
+      retweet_count          = excluded.retweet_count,
+      reply_count            = excluded.reply_count,
+      like_count             = excluded.like_count,
+      quote_count            = excluded.quote_count,
+      impression_count       = excluded.impression_count,
+      bookmark_count         = excluded.bookmark_count,
+      entities_json          = excluded.entities_json,
+      referenced_tweets_json = excluded.referenced_tweets_json,
+      saved_at               = excluded.saved_at,
+      source                 = excluded.source,
+      article_crawl_status   = COALESCE(excluded.article_crawl_status, tweets.article_crawl_status)
   `).run({
     id: tweet.id,
     text: tweet.text ?? null,
@@ -45,6 +71,7 @@ export function upsertTweet(db: Database.Database, tweet: XTweet, source: string
     referenced_tweets_json: tweet.referenced_tweets ? JSON.stringify(tweet.referenced_tweets) : null,
     saved_at: new Date().toISOString(),
     source,
+    article_crawl_status: articleCrawlStatus,
   })
 }
 
@@ -52,16 +79,21 @@ export function upsertTweet(db: Database.Database, tweet: XTweet, source: string
  * Shared helper called by all tweet-returning tools.
  * Saves tweets, associated users, media, and article content from note_tweet.
  *
- * @param db       - Database instance from getDb()
- * @param tweets   - Array of XTweet objects from the API response data
- * @param includes - Expanded includes (users, media, referenced tweets)
- * @param source   - Which tool produced this data: 'bookmarks'|'search'|'get_tweet'|'user_tweets'|'thread'
+ * @param db                - Database instance from getDb()
+ * @param tweets            - Array of XTweet objects from the API response data
+ * @param includes          - Expanded includes (users, media, referenced tweets)
+ * @param source            - Which tool produced this data: 'bookmarks'|'search'|'get_tweet'|'user_tweets'|'thread'
+ * @param articleStatusMap  - Optional map of tweet id → article_crawl_status
+ *                            ('pending' | 'ok' | 'missing' | 'failed'). When
+ *                            absent, article_crawl_status is left untouched
+ *                            on conflict (COALESCE preserves any prior value).
  */
 export function upsertTweets(
   db: Database.Database,
   tweets: XTweet[],
   includes: XIncludes | undefined,
-  source: string
+  source: string,
+  articleStatusMap?: Map<string, string>,
 ): void {
   const saveAll = db.transaction(() => {
     // Save users from includes
@@ -73,7 +105,8 @@ export function upsertTweets(
 
     // Save each tweet and its media/articles
     for (const tweet of tweets) {
-      upsertTweet(db, tweet, source)
+      const status = articleStatusMap?.get(tweet.id) ?? null
+      upsertTweet(db, tweet, source, status)
 
       // Save media attached to this tweet
       if (tweet.attachments?.media_keys?.length && includes?.media) {
