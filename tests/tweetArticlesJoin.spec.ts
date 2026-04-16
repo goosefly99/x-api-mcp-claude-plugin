@@ -24,6 +24,8 @@ import {
   resolveArticlesForTweet,
   resolveArticlesForTweets,
 } from '../services/auto-crawl.ts'
+import { articleIngestService } from '../services/articleIngestService.ts'
+import type { ArticleResolution, ResolveArticleForTweet } from '../services/articleIngestService.ts'
 import { getTweetArticles } from '../db/repos/articles.ts'
 import type { DetectableTweet } from '../services/articleTypes.ts'
 import type { XTweet } from '../types.ts'
@@ -172,5 +174,63 @@ describe('X3: tweet_articles one-to-many join + articles[] envelope', () => {
       expect(a.article_id).toBeDefined()
       expect(a.url).toBeDefined()
     }
+  })
+
+  it('mixed ok/failed: URL-1 resolves ok, URL-2 resolves failed — tweet_articles has 2 rows with correct statuses', async () => {
+    const db = makeInMemoryDb()
+    const tweet = tweetWithTwoArticleUrls()
+    const url1 = 'https://substack.com/article/alpha'
+    const url2 = 'https://medium.com/@x/beta'
+
+    // Mock resolver: returns ok for url1, failed for url2
+    const mockResolver: ResolveArticleForTweet = async (_db, _tweet) => {
+      return [
+        { status: 'ok', url: url1, article_id: url1 } satisfies ArticleResolution,
+        { status: 'failed', url: url2, reason: 'network error' } satisfies ArticleResolution,
+      ]
+    }
+
+    const service = articleIngestService({ concurrency: 4, resolver: mockResolver })
+    const envelope = await service.ingestForTweets(db, [tweet as DetectableTweet])
+
+    // (1) Envelope has 2 resolutions for the tweet
+    const resolutions = envelope.get('tweet_multi')
+    expect(resolutions).toBeDefined()
+    expect(resolutions).toHaveLength(2)
+    expect(resolutions![0].status).toBe('ok')
+    expect(resolutions![1].status).toBe('failed')
+    expect((resolutions![1] as { reason?: string }).reason).toBe('network error')
+
+    // (2) Persist the resolutions to tweet_articles (mirrors resolveArticlesForTweets logic)
+    const { insertTweetArticle } = await import('../db/repos/articles.ts')
+    for (const r of resolutions!) {
+      if (r.status === 'missing') continue
+      const url = r.url
+      const articleId = r.article_id ?? url
+      if (!url || !articleId) continue
+      insertTweetArticle(
+        db,
+        'tweet_multi',
+        articleId,
+        url,
+        r.status === 'ok' ? 'ok' : 'failed',
+        (r as { reason?: string }).reason ?? null,
+      )
+    }
+
+    // (3) tweet_articles has exactly 2 rows
+    const joinRows = getTweetArticles(db, 'tweet_multi')
+    expect(joinRows).toHaveLength(2)
+
+    const row1 = joinRows.find((r) => r.url === url1)
+    const row2 = joinRows.find((r) => r.url === url2)
+
+    expect(row1).toBeDefined()
+    expect(row1!.status).toBe('ok')
+    expect(row1!.failure_reason).toBeNull()
+
+    expect(row2).toBeDefined()
+    expect(row2!.status).toBe('failed')
+    expect(row2!.failure_reason).toBe('network error')
   })
 })

@@ -125,6 +125,7 @@ export function runMigrations(db: Database.Database): void {
   if (currentVersion < 4) {
     // v4: add article_crawl_status column for auto-crawl bookkeeping.
     // Status values: 'pending' | 'ok' | 'missing' | 'failed'.
+    // NOTE: reflects articles[0] only; per-URL statuses in tweet_articles join table (X3).
     try {
       db.exec('ALTER TABLE tweets ADD COLUMN article_crawl_status TEXT')
     } catch {

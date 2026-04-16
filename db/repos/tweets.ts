@@ -87,6 +87,8 @@ export function upsertTweet(
  *                            ('pending' | 'ok' | 'missing' | 'failed'). When
  *                            absent, article_crawl_status is left untouched
  *                            on conflict (COALESCE preserves any prior value).
+ *                            NOTE: first-article-only; for full per-URL status
+ *                            query tweet_articles.
  */
 export function upsertTweets(
   db: Database.Database,
