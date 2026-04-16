@@ -20,6 +20,19 @@ export interface QueryArticlesOpts {
 }
 
 /**
+ * A row from the `tweet_articles` join table — one per (tweet, article) link.
+ * Schema v5 introduced this table to model the one-to-many relationship
+ * between a tweet and the articles it links to.
+ */
+export interface TweetArticleRow {
+  tweet_id: string
+  article_id: string
+  url: string
+  status: 'ok' | 'failed'
+  failure_reason: string | null
+}
+
+/**
  * Upserts an article. The id is tweet_id for API articles, or URL for crawled articles.
  */
 export function upsertArticle(db: Database.Database, article: ArticleInput): void {
@@ -72,4 +85,38 @@ export function queryArticles(db: Database.Database, opts: QueryArticlesOpts = {
     ORDER BY saved_at DESC
     LIMIT ? OFFSET ?
   `).all(...params) as ArticleRow[]
+}
+
+// ── tweet_articles join table (schema v5) ───────────────────────────────────
+
+/**
+ * Upserts a single (tweet_id, article_id) link in the `tweet_articles`
+ * join table.  Uses INSERT OR REPLACE so repeat ingestion is idempotent
+ * and updates the status/failure_reason to the latest observed value.
+ */
+export function insertTweetArticle(
+  db: Database.Database,
+  tweetId: string,
+  articleId: string,
+  url: string,
+  status: 'ok' | 'failed',
+  failureReason: string | null = null,
+): void {
+  db.prepare(`
+    INSERT OR REPLACE INTO tweet_articles (
+      tweet_id, article_id, url, status, failure_reason
+    ) VALUES (?, ?, ?, ?, ?)
+  `).run(tweetId, articleId, url, status, failureReason)
+}
+
+/** Returns all tweet_articles rows for a given tweet_id, ordered by url. */
+export function getTweetArticles(
+  db: Database.Database,
+  tweetId: string,
+): TweetArticleRow[] {
+  return db
+    .prepare(
+      'SELECT tweet_id, article_id, url, status, failure_reason FROM tweet_articles WHERE tweet_id = ? ORDER BY url',
+    )
+    .all(tweetId) as TweetArticleRow[]
 }

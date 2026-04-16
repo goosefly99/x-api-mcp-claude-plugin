@@ -155,3 +155,27 @@ export interface XRateLimitInfo {
   remaining: number
   reset: number
 }
+
+// ── Article envelope (X3 refactor: singular → plural) ─────────────────────────
+
+/**
+ * A single resolved article linked to a tweet.  Re-exported here so tool-layer
+ * consumers can import `Article` without reaching into `services/articleTypes`.
+ * Post-X3 a tweet carries `articles: Article[]` (plural) — a tweet with two
+ * qualifying expanded_urls produces two Article entries.
+ */
+export type { ArticleResolution as Article } from './services/articleTypes.ts'
+
+/**
+ * Per-tweet envelope shape produced by `resolveArticlesForTweets`.
+ *   { tweetId: 'abc', articles: [Article, Article] }
+ *
+ * NOTE: This is the logical shape; the service currently returns
+ * `Map<tweetId, Article[]>` rather than an object-shaped envelope.  The
+ * interface below documents the contract for future consumers (e.g. X4
+ * tool-surface rework) without forcing a map→object migration in this PR.
+ */
+export interface TweetArticlesEnvelope {
+  tweetId: string
+  articles: import('./services/articleTypes.ts').ArticleResolution[]
+}

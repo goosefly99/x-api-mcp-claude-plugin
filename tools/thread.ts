@@ -119,7 +119,8 @@ export async function handleGetThread(args: Record<string, unknown>) {
   // Step 5: Resolve articles BEFORE persisting so article_crawl_status
   // lands in the same transaction as the tweet rows.
   const db = getDb()
-  let articleMap = new Map<string, ArticleResolution>()
+  // TODO(X4): Surface all elements of articles[] in the tool response.
+  let articleMap = new Map<string, ArticleResolution[]>()
   if (autoCrawl) {
     try {
       articleMap = await resolveArticlesForTweets(db, allTweets)
@@ -129,7 +130,9 @@ export async function handleGetThread(args: Record<string, unknown>) {
   }
 
   const statusMap = new Map<string, string>()
-  for (const [id, res] of articleMap) statusMap.set(id, res.status)
+  for (const [id, res] of articleMap) {
+    if (res.length > 0) statusMap.set(id, res[0].status)
+  }
 
   // Persist to DB
   try {
@@ -141,9 +144,8 @@ export async function handleGetThread(args: Record<string, unknown>) {
   // Step 6: Format output
   const formatted = allTweets
     .map((t) => {
-      const line = articleMap.has(t.id)
-        ? `\n${formatArticleLine(articleMap.get(t.id)!)}`
-        : ''
+      const first = articleMap.get(t.id)?.[0]
+      const line = first ? `\n${formatArticleLine(first)}` : ''
       return `${formatTweet(t, mergedIncludes)}${line}`
     })
     .join('\n\n')

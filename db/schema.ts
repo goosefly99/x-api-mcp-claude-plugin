@@ -136,4 +136,28 @@ export function runMigrations(db: Database.Database): void {
       new Date().toISOString()
     )
   }
+
+  if (currentVersion < 5) {
+    // v5: one-to-many tweet→articles join table.
+    // A tweet can link 0..N distinct article URLs; each link gets a row.
+    // status = 'ok' | 'failed'; failure_reason captures why a crawl failed
+    // (e.g. 'login_required', 'empty_content', 'timeout').
+    // Idempotent: CREATE TABLE IF NOT EXISTS + unique composite PK on
+    // (tweet_id, article_id) so the same pair cannot be inserted twice.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS tweet_articles (
+        tweet_id       TEXT NOT NULL,
+        article_id     TEXT NOT NULL,
+        url            TEXT NOT NULL,
+        status         TEXT NOT NULL,
+        failure_reason TEXT,
+        PRIMARY KEY (tweet_id, article_id)
+      );
+    `)
+
+    db.prepare('INSERT INTO schema_version (version, applied_at) VALUES (?, ?)').run(
+      5,
+      new Date().toISOString()
+    )
+  }
 }

@@ -84,7 +84,9 @@ describe('articleIngestService', () => {
       await new Promise<void>((resolve) => resolvers.push(resolve))
       inFlight--
       const id = (tweet as { id: string }).id
-      return { status: 'ok', url: `https://substack.com/${id}`, article_id: id } satisfies ArticleResolution
+      return [
+        { status: 'ok', url: `https://substack.com/${id}`, article_id: id } satisfies ArticleResolution,
+      ]
     })
 
     const db = makeFakeDb()
@@ -127,7 +129,9 @@ describe('articleIngestService', () => {
       await new Promise<void>((resolve) => resolvers.push(resolve))
       inFlight--
       const id = (tweet as { id: string }).id
-      return { status: 'ok', url: `https://substack.com/${id}`, article_id: id } satisfies ArticleResolution
+      return [
+        { status: 'ok', url: `https://substack.com/${id}`, article_id: id } satisfies ArticleResolution,
+      ]
     })
 
     const db = makeFakeDb()
@@ -164,16 +168,20 @@ describe('articleIngestService', () => {
     const results = await service.ingestForTweets(db, makeTweets(4))
 
     expect(results.size).toBe(4)
+    // Post-X3: each Map value is an ArticleResolution[]. A rejected resolver
+    // maps to a single-element `[{ status: 'failed', reason }]` array so
+    // consumers always see at least one entry per tweet.
     for (const [, res] of results) {
-      expect(res.status).toBe('failed')
-      expect(res.reason).toBe('network error')
+      expect(res).toHaveLength(1)
+      expect(res[0].status).toBe('failed')
+      expect(res[0].reason).toBe('network error')
     }
   })
 
   it('returns missing when resolver returns missing status', async () => {
-    const mockResolver: ResolveArticleForTweet = vi.fn(async () => ({
-      status: 'missing' as const,
-    }))
+    const mockResolver: ResolveArticleForTweet = vi.fn(async () => [
+      { status: 'missing' as const },
+    ])
 
     const db = makeFakeDb()
     const service = articleIngestService({ concurrency: 4, resolver: mockResolver })
@@ -181,7 +189,8 @@ describe('articleIngestService', () => {
 
     expect(results.size).toBe(4)
     for (const [, res] of results) {
-      expect(res.status).toBe('missing')
+      expect(res).toHaveLength(1)
+      expect(res[0].status).toBe('missing')
     }
   })
 
@@ -197,7 +206,7 @@ describe('articleIngestService', () => {
 
       // A resolver that never resolves (simulates a hung 30s crawl)
       const neverResolves: ResolveArticleForTweet = vi.fn(
-        () => new Promise<ArticleResolution>(() => {/* intentionally never resolves */}),
+        () => new Promise<ArticleResolution[]>(() => {/* intentionally never resolves */}),
       )
 
       const db = makeFakeDb()
@@ -220,18 +229,21 @@ describe('articleIngestService', () => {
 
       const res = results.get('tweet_0')!
       expect(res).toBeDefined()
-      expect(res.status).toBe('failed')
-      expect(res.reason).toBe('timeout')
+      expect(res).toHaveLength(1)
+      expect(res[0].status).toBe('failed')
+      expect(res[0].reason).toBe('timeout')
     })
 
     it('does not time out a fast resolver (resolves before 15s)', async () => {
       vi.useFakeTimers()
 
-      const fastResolver: ResolveArticleForTweet = vi.fn(async (_db, tweet) => ({
-        status: 'ok' as const,
-        url: `https://substack.com/${(tweet as { id: string }).id}`,
-        article_id: (tweet as { id: string }).id,
-      }))
+      const fastResolver: ResolveArticleForTweet = vi.fn(async (_db, tweet) => [
+        {
+          status: 'ok' as const,
+          url: `https://substack.com/${(tweet as { id: string }).id}`,
+          article_id: (tweet as { id: string }).id,
+        },
+      ])
 
       const db = makeFakeDb()
       const service = articleIngestService({
@@ -249,7 +261,8 @@ describe('articleIngestService', () => {
 
       expect(results.size).toBe(2)
       for (const [, res] of results) {
-        expect(res.status).toBe('ok')
+        expect(res).toHaveLength(1)
+        expect(res[0].status).toBe('ok')
       }
     })
 
@@ -257,7 +270,7 @@ describe('articleIngestService', () => {
       vi.useFakeTimers()
 
       const neverResolves: ResolveArticleForTweet = vi.fn(
-        () => new Promise<ArticleResolution>(() => {/* intentionally never resolves */}),
+        () => new Promise<ArticleResolution[]>(() => {/* intentionally never resolves */}),
       )
 
       const db = makeFakeDb()
@@ -270,17 +283,21 @@ describe('articleIngestService', () => {
       const results = await resultPromise
 
       expect(results.size).toBe(1)
-      expect(results.get('tweet_0')!.status).toBe('failed')
-      expect(results.get('tweet_0')!.reason).toBe('timeout')
+      const r0 = results.get('tweet_0')!
+      expect(r0).toHaveLength(1)
+      expect(r0[0].status).toBe('failed')
+      expect(r0[0].reason).toBe('timeout')
     })
   })
 
   it('skips already-resolved tweets correctly via resolver', async () => {
-    const mockResolver: ResolveArticleForTweet = vi.fn(async (_db, tweet) => ({
-      status: 'ok' as const,
-      url: `https://substack.com/article/${(tweet as { id: string }).id}`,
-      article_id: (tweet as { id: string }).id,
-    }))
+    const mockResolver: ResolveArticleForTweet = vi.fn(async (_db, tweet) => [
+      {
+        status: 'ok' as const,
+        url: `https://substack.com/article/${(tweet as { id: string }).id}`,
+        article_id: (tweet as { id: string }).id,
+      },
+    ])
 
     const db = makeFakeDb()
     const service = articleIngestService({ concurrency: 4, resolver: mockResolver })
@@ -289,7 +306,8 @@ describe('articleIngestService', () => {
     expect(mockResolver).toHaveBeenCalledTimes(4)
     expect(results.size).toBe(4)
     for (const [, res] of results) {
-      expect(res.status).toBe('ok')
+      expect(res).toHaveLength(1)
+      expect(res[0].status).toBe('ok')
     }
   })
 })

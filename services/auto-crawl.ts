@@ -16,7 +16,7 @@ import type Database from 'better-sqlite3'
 import type { TweetRow } from '../db/types.ts'
 import type { XTweet } from '../types.ts'
 import { crawlArticle } from '../crawler.ts'
-import { upsertArticle } from '../db/repos/articles.ts'
+import { upsertArticle, insertTweetArticle } from '../db/repos/articles.ts'
 import { articleIngestService } from './articleIngestService.ts'
 import type { ArticleResolution, DetectableTweet } from './articleTypes.ts'
 
@@ -116,20 +116,44 @@ function isQualifyingExternalArticleUrl(url: string): boolean {
 }
 
 /**
- * Returns the first URL in the tweet that looks like an X Article
- * (x.com/:user/status/:id/article/:num or legacy twitter.com form)
- * or a qualifying external article URL. Returns null when nothing matches.
+ * Returns ALL URLs in the tweet that look like article URLs — X-native
+ * (`x.com/:user/status/:id/article/:num` or legacy `twitter.com`) or
+ * qualifying external article URLs (substack, medium, major publishers).
+ *
+ * Order: X-native URLs first (preferred), then externals, preserving input
+ * order within each group.  Duplicate URLs are collapsed.  Returns an
+ * empty array when nothing matches.
+ *
+ * Post-X3: plural. A tweet can link multiple articles (e.g. a tweet that
+ * includes both a substack.com and a medium.com link); each URL resolves
+ * independently downstream.
+ */
+export function detectArticleUrls(tweet: DetectableTweet): string[] {
+  const urls = collectCandidateUrls(tweet)
+  const seen = new Set<string>()
+  const xNative: string[] = []
+  const externals: string[] = []
+  for (const u of urls) {
+    if (seen.has(u)) continue
+    if (isXArticleUrl(u)) {
+      seen.add(u)
+      xNative.push(u)
+    } else if (isQualifyingExternalArticleUrl(u)) {
+      seen.add(u)
+      externals.push(u)
+    }
+  }
+  return [...xNative, ...externals]
+}
+
+/**
+ * @deprecated Use `detectArticleUrls` (plural). Returns only the first match
+ * for callers that have not yet migrated to the one-to-many contract.
+ * Scheduled for removal once all callers are updated.
  */
 export function detectArticleUrl(tweet: DetectableTweet): string | null {
-  const urls = collectCandidateUrls(tweet)
-  // Prefer X-native article URLs over external ones.
-  for (const u of urls) {
-    if (isXArticleUrl(u)) return u
-  }
-  for (const u of urls) {
-    if (isQualifyingExternalArticleUrl(u)) return u
-  }
-  return null
+  const all = detectArticleUrls(tweet)
+  return all.length > 0 ? all[0] : null
 }
 
 // ── DB helpers ────────────────────────────────────────────────────
@@ -198,47 +222,106 @@ export async function crawlAndSaveArticle(
 // ── Per-tweet orchestration ───────────────────────────────────────
 
 /**
- * Orchestrates detect → exists → crawl for a single tweet.
- *   - no URL detected         → status: 'missing'
- *   - URL already in articles → status: 'ok' (no crawl)
- *   - URL new                 → crawl; status: 'ok' | 'failed'
+ * Orchestrates detect → exists → crawl for a single tweet, across ALL
+ * article-like URLs on the tweet.  Returns one ArticleResolution per URL.
+ *
+ *   - no URLs detected        → `[{ status: 'missing' }]` (single element)
+ *   - URL already in articles → `{ status: 'ok', url, article_id }`
+ *   - URL new                 → crawl; `{ status: 'ok' | 'failed', ... }`
+ *
+ * Each URL resolves independently — one failing crawl does not short-circuit
+ * the others.  URL-level concurrency within a tweet is sequential here; the
+ * tweet-level fan-out in `resolveArticlesForTweets` provides the outer
+ * concurrency budget via articleIngestService.
+ */
+export async function resolveArticlesForTweet(
+  db: Database.Database,
+  tweet: DetectableTweet,
+): Promise<ArticleResolution[]> {
+  const urls = detectArticleUrls(tweet)
+  if (urls.length === 0) {
+    return [{ status: 'missing' }]
+  }
+
+  const out: ArticleResolution[] = []
+  for (const url of urls) {
+    if (articleExists(db, url)) {
+      const existingId = getArticleIdByUrl(db, url) ?? url
+      out.push({ status: 'ok', url, article_id: existingId })
+      continue
+    }
+
+    const crawled = await crawlAndSaveArticle(db, url)
+    if (crawled.status === 'ok') {
+      out.push({ status: 'ok', url, article_id: crawled.article_id })
+    } else {
+      out.push({ status: 'failed', url, reason: crawled.reason })
+    }
+  }
+  return out
+}
+
+/**
+ * @deprecated Use `resolveArticlesForTweet` (plural). Returns only the first
+ * resolution for callers that have not yet migrated to the one-to-many
+ * contract.  Kept for compile-time compatibility during the X3→X4 transition.
  */
 export async function resolveArticleForTweet(
   db: Database.Database,
   tweet: DetectableTweet,
 ): Promise<ArticleResolution> {
-  const url = detectArticleUrl(tweet)
-  if (!url) {
-    return { status: 'missing' }
-  }
-
-  if (articleExists(db, url)) {
-    const existingId = getArticleIdByUrl(db, url) ?? url
-    return { status: 'ok', url, article_id: existingId }
-  }
-
-  const crawled = await crawlAndSaveArticle(db, url)
-  if (crawled.status === 'ok') {
-    return { status: 'ok', url, article_id: crawled.article_id }
-  }
-  return { status: 'failed', url, reason: crawled.reason }
+  const list = await resolveArticlesForTweet(db, tweet)
+  return list[0] ?? { status: 'missing' }
 }
 
 /**
- * Concurrent fan-out of resolveArticleForTweet across an array of tweets,
+ * Concurrent fan-out of resolveArticlesForTweet across an array of tweets,
  * capped at 4 simultaneous crawlArticle calls (via articleIngestService).
  *
- * The concurrency cap can be overridden via the optional second argument.
- * Callers that previously relied on sequential behavior will now benefit
- * from parallelism up to the cap without any API change.
+ * Side effect: persists one `tweet_articles` row per URL resolution that
+ * carries a URL (i.e. every non-`missing` result).  Persistence is wrapped
+ * in a try/catch so a DB write failure never cascades into the caller's
+ * auto-crawl flow — the in-memory Map is always returned.
+ *
+ * Post-X3: returns `Map<tweet_id, ArticleResolution[]>` (plural array per
+ * tweet) to model the one-to-many tweet→articles relationship.
  */
 export async function resolveArticlesForTweets(
   db: Database.Database,
   tweets: DetectableTweet[],
   concurrency = 4,
-): Promise<Map<string, ArticleResolution>> {
-  const service = articleIngestService({ concurrency, resolver: resolveArticleForTweet })
-  return service.ingestForTweets(db, tweets)
+): Promise<Map<string, ArticleResolution[]>> {
+  const service = articleIngestService({ concurrency, resolver: resolveArticlesForTweet })
+  const map = await service.ingestForTweets(db, tweets)
+
+  // Persist each resolution to tweet_articles.  One row per URL — `missing`
+  // resolutions have no URL/article_id and so are NOT written (the tweet's
+  // overall status is already captured in tweets.article_crawl_status).
+  for (const [tweetId, resolutions] of map) {
+    for (const r of resolutions) {
+      if (r.status === 'missing') continue
+      const url = r.url
+      const articleId = r.article_id ?? url
+      if (!url || !articleId) continue
+      try {
+        insertTweetArticle(
+          db,
+          tweetId,
+          articleId,
+          url,
+          r.status === 'ok' ? 'ok' : 'failed',
+          r.reason ?? null,
+        )
+      } catch (err) {
+        // DB write failures must never break the caller's response path.
+        process.stderr.write(
+          `x-api: insertTweetArticle failed (tweet=${tweetId} url=${url}): ${err}\n`,
+        )
+      }
+    }
+  }
+
+  return map
 }
 
 // ── Output formatting ─────────────────────────────────────────────

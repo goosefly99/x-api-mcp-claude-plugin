@@ -20,10 +20,17 @@ export interface ArticleResolution {
 export type DetectableTweet = Pick<XTweet, 'id' | 'text' | 'note_tweet' | 'entities'> | TweetRow
 
 /**
- * Function signature for resolving a single tweet's article.
- * Injected into articleIngestService to avoid a circular import.
+ * Function signature for resolving a single tweet's articles (plural).
+ *
+ * Post-X3: a tweet may link multiple distinct article URLs; each resolves
+ * independently (success/failure/timeout per URL). The resolver therefore
+ * returns an array of resolutions — one per detected URL.
+ *
+ * Backward compat: a tweet with zero article URLs still produces a
+ * one-element array `[{ status: 'missing' }]` so `Map<tweetId, Resolution[]>`
+ * always has an entry for every input tweet.
  */
 export type ResolveArticleForTweet = (
   db: import('better-sqlite3').Database,
   tweet: DetectableTweet,
-) => Promise<ArticleResolution>
+) => Promise<ArticleResolution[]>

@@ -35,7 +35,8 @@ export async function handleSearchTweets(args: Record<string, unknown>) {
   }
 
   const db = getDb()
-  let articleMap = new Map<string, ArticleResolution>()
+  // TODO(X4): Surface all elements of articles[] in the tool response.
+  let articleMap = new Map<string, ArticleResolution[]>()
   if (autoCrawl) {
     try {
       articleMap = await resolveArticlesForTweets(db, response.data)
@@ -45,7 +46,9 @@ export async function handleSearchTweets(args: Record<string, unknown>) {
   }
 
   const statusMap = new Map<string, string>()
-  for (const [id, res] of articleMap) statusMap.set(id, res.status)
+  for (const [id, res] of articleMap) {
+    if (res.length > 0) statusMap.set(id, res[0].status)
+  }
 
   try {
     upsertTweets(db, response.data, response.includes, 'search', statusMap)
@@ -55,9 +58,8 @@ export async function handleSearchTweets(args: Record<string, unknown>) {
 
   const formatted = response.data
     .map((t) => {
-      const line = articleMap.has(t.id)
-        ? `\n${formatArticleLine(articleMap.get(t.id)!)}`
-        : ''
+      const first = articleMap.get(t.id)?.[0]
+      const line = first ? `\n${formatArticleLine(first)}` : ''
       return `${formatTweet(t, response.includes)}${line}`
     })
     .join('\n\n')

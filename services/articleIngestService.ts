@@ -44,7 +44,7 @@ export interface ArticleIngestService {
   ingestForTweets(
     db: Database.Database,
     tweets: DetectableTweet[],
-  ): Promise<Map<string, ArticleResolution>>
+  ): Promise<Map<string, ArticleResolution[]>>
 }
 
 // ── Semaphore ──────────────────────────────────────────────────────────────
@@ -82,11 +82,12 @@ class Semaphore {
 
 /**
  * Returns a Promise that resolves (never rejects) with a timed-out
- * ArticleResolution sentinel after `ms` milliseconds.
+ * ArticleResolution[] sentinel after `ms` milliseconds. The plural return
+ * mirrors ResolveArticleForTweet so Promise.race settles to a single shape.
  */
-function timeoutResolution(ms: number): Promise<ArticleResolution> {
-  return new Promise<ArticleResolution>((resolve) => {
-    setTimeout(() => resolve({ status: 'failed', reason: 'timeout' }), ms)
+function timeoutResolution(ms: number): Promise<ArticleResolution[]> {
+  return new Promise<ArticleResolution[]>((resolve) => {
+    setTimeout(() => resolve([{ status: 'failed', reason: 'timeout' }]), ms)
   })
 }
 
@@ -105,8 +106,8 @@ export function articleIngestService(opts: ArticleIngestOptions): ArticleIngestS
     async ingestForTweets(
       db: Database.Database,
       tweets: DetectableTweet[],
-    ): Promise<Map<string, ArticleResolution>> {
-      const out = new Map<string, ArticleResolution>()
+    ): Promise<Map<string, ArticleResolution[]>> {
+      const out = new Map<string, ArticleResolution[]>()
       const sem = new Semaphore(cap)
 
       const tasks = tweets.map(async (tweet) => {
@@ -114,9 +115,13 @@ export function articleIngestService(opts: ArticleIngestOptions): ArticleIngestS
         try {
           // Race the resolver against a soft timeout.  The timeout promise
           // resolves (not rejects) so Promise.race always settles to a valid
-          // ArticleResolution.  The resolver is NOT cancelled — it may
+          // ArticleResolution[].  The resolver is NOT cancelled — it may
           // continue running in the background (e.g. a Playwright session
           // that can't be interrupted mid-flight).
+          //
+          // Post-X3: resolver returns an array (one entry per article URL
+          // on the tweet).  The timeout arm returns a one-element failure
+          // array so downstream consumers can treat both branches uniformly.
           const res = await Promise.race([
             resolver(db, tweet),
             timeoutResolution(timeoutMs),
@@ -124,7 +129,7 @@ export function articleIngestService(opts: ArticleIngestOptions): ArticleIngestS
           out.set(tweet.id, res)
         } catch (err: unknown) {
           const reason = err instanceof Error ? err.message : String(err)
-          out.set(tweet.id, { status: 'failed', reason })
+          out.set(tweet.id, [{ status: 'failed', reason }])
         } finally {
           // Semaphore must release regardless of how the race settled.
           sem.release()
