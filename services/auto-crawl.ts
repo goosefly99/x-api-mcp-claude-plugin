@@ -17,6 +17,7 @@ import type { TweetRow } from '../db/types.ts'
 import type { XTweet } from '../types.ts'
 import { crawlArticle } from '../crawler.ts'
 import { upsertArticle } from '../db/repos/articles.ts'
+import { articleIngestService } from './articleIngestService.ts'
 
 export type ArticleStatus = 'ok' | 'missing' | 'failed'
 
@@ -124,7 +125,7 @@ function isQualifyingExternalArticleUrl(url: string): boolean {
 
 /**
  * Returns the first URL in the tweet that looks like an X Article
- * (https://x.com/*/status/*/article/* or legacy https://twitter.com/*)
+ * (x.com/:user/status/:id/article/:num or legacy twitter.com form)
  * or a qualifying external article URL. Returns null when nothing matches.
  */
 export function detectArticleUrl(tweet: DetectableTweet): string | null {
@@ -232,25 +233,20 @@ export async function resolveArticleForTweet(
 }
 
 /**
- * Sequential fan-out of resolveArticleForTweet across an array of tweets.
- * Sequential (not parallel) so we don't flood the shared Playwright
- * browser context with concurrent page loads.
+ * Concurrent fan-out of resolveArticleForTweet across an array of tweets,
+ * capped at 4 simultaneous crawlArticle calls (via articleIngestService).
+ *
+ * The concurrency cap can be overridden via the optional second argument.
+ * Callers that previously relied on sequential behavior will now benefit
+ * from parallelism up to the cap without any API change.
  */
 export async function resolveArticlesForTweets(
   db: Database.Database,
   tweets: DetectableTweet[],
+  concurrency = 4,
 ): Promise<Map<string, ArticleResolution>> {
-  const out = new Map<string, ArticleResolution>()
-  for (const tweet of tweets) {
-    try {
-      const result = await resolveArticleForTweet(db, tweet)
-      out.set(tweet.id, result)
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err)
-      out.set(tweet.id, { status: 'failed', reason })
-    }
-  }
-  return out
+  const service = articleIngestService({ concurrency })
+  return service.ingestForTweets(db, tweets)
 }
 
 // ── Output formatting ─────────────────────────────────────────────
