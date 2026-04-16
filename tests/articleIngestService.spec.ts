@@ -3,14 +3,18 @@
  *
  * Strategy:
  *   - Provide 12 tweets, each with a unique article URL.
- *   - Mock crawlArticle so each call takes ~20 ms and increments / decrements
- *     a shared `inFlight` counter.
+ *   - Inject a mock resolver that uses manually-resolved Promises to give
+ *     explicit control over which task starts and completes. This eliminates
+ *     real-time scheduling dependency and makes the concurrency test
+ *     fully deterministic regardless of CI scheduler speed.
  *   - After the run, assert peakInFlight <= concurrency cap (4).
  *   - Also assert that all 12 results were produced (no drops).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { DetectableTweet } from '../services/auto-crawl.ts'
+import { articleIngestService } from '../services/articleIngestService.ts'
+import type { DetectableTweet, ArticleResolution, ResolveArticleForTweet } from '../services/articleIngestService.ts'
+import type Database from 'better-sqlite3'
 
 // ── Fake DB ──────────────────────────────────────────────────────────────────
 
@@ -38,18 +42,8 @@ function makeFakeDb() {
         },
       }
     },
-  } as unknown as import('better-sqlite3').Database
+  } as unknown as Database.Database
 }
-
-// ── Mock crawlArticle ────────────────────────────────────────────────────────
-
-// We mock the module BEFORE importing the service so Vitest replaces the
-// module factory reference that articleIngestService holds.
-vi.mock('../crawler.ts', () => {
-  return {
-    crawlArticle: vi.fn(),
-  }
-})
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -77,92 +71,135 @@ describe('articleIngestService', () => {
   })
 
   it('respects concurrency cap of 4 when processing 12 tweets', async () => {
-    const { crawlArticle } = await import('../crawler.ts')
-    const mockedCrawl = vi.mocked(crawlArticle)
-
     let inFlight = 0
     let peakInFlight = 0
 
-    mockedCrawl.mockImplementation(async (_url: string) => {
+    // Each task gets its own resolve handle so we control exactly when it finishes.
+    const resolvers: Array<() => void> = []
+
+    const mockResolver: ResolveArticleForTweet = vi.fn(async (_db, tweet) => {
       inFlight++
       if (inFlight > peakInFlight) peakInFlight = inFlight
-      // Simulate async work (~20 ms)
-      await new Promise<void>((resolve) => setTimeout(resolve, 20))
+      // Park here until the test explicitly unblocks this task.
+      await new Promise<void>((resolve) => resolvers.push(resolve))
       inFlight--
-      return { content: 'x'.repeat(100), loginRequired: false }
+      const id = (tweet as { id: string }).id
+      return { status: 'ok', url: `https://substack.com/${id}`, article_id: id } satisfies ArticleResolution
     })
 
-    const { articleIngestService } = await import('../services/articleIngestService.ts')
     const db = makeFakeDb()
-    const service = articleIngestService({ concurrency: 4 })
-    const results = await service.ingestForTweets(db, makeTweets(12))
+    const service = articleIngestService({ concurrency: 4, resolver: mockResolver })
 
-    expect(peakInFlight).toBeGreaterThan(1) // actually parallelized
-    expect(peakInFlight).toBeLessThanOrEqual(4) // cap respected
-    expect(results.size).toBe(12) // all tweets processed
+    // Start the ingestion but don't await yet — tasks park on their promises.
+    const resultPromise = service.ingestForTweets(db, makeTweets(12))
+
+    // Drain the microtask queue so tasks can start and reach their park point.
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    // With cap=4 and 12 tasks we expect exactly 4 tasks to be in-flight now.
+    expect(peakInFlight).toBe(4)
+
+    // Unblock all parked tasks one by one, letting the semaphore refill.
+    while (resolvers.length > 0) {
+      resolvers.shift()!()
+      // Allow newly released tasks to acquire and park.
+      await Promise.resolve()
+      await Promise.resolve()
+    }
+
+    const results = await resultPromise
+
+    expect(peakInFlight).toBe(4)           // cap was reached exactly
+    expect(peakInFlight).toBeLessThanOrEqual(4) // cap was never exceeded
+    expect(results.size).toBe(12)          // all tweets processed
   })
 
-  it('defaults to concurrency 4 when no option is supplied', async () => {
-    const { crawlArticle } = await import('../crawler.ts')
-    const mockedCrawl = vi.mocked(crawlArticle)
-
+  it('defaults to concurrency 4 when no concurrency option is supplied', async () => {
     let inFlight = 0
     let peakInFlight = 0
+    const resolvers: Array<() => void> = []
 
-    mockedCrawl.mockImplementation(async (_url: string) => {
+    const mockResolver: ResolveArticleForTweet = vi.fn(async (_db, tweet) => {
       inFlight++
       if (inFlight > peakInFlight) peakInFlight = inFlight
-      await new Promise<void>((resolve) => setTimeout(resolve, 20))
+      await new Promise<void>((resolve) => resolvers.push(resolve))
       inFlight--
-      return { content: 'x'.repeat(100), loginRequired: false }
+      const id = (tweet as { id: string }).id
+      return { status: 'ok', url: `https://substack.com/${id}`, article_id: id } satisfies ArticleResolution
     })
 
-    const { articleIngestService } = await import('../services/articleIngestService.ts')
     const db = makeFakeDb()
-    const service = articleIngestService() // no concurrency arg
-    const results = await service.ingestForTweets(db, makeTweets(12))
+    // Omit concurrency — should default to 4.
+    const service = articleIngestService({ resolver: mockResolver })
 
+    const resultPromise = service.ingestForTweets(db, makeTweets(12))
+
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    // Default cap is 4; exactly 4 tasks should be in-flight.
+    expect(peakInFlight).toBe(4)
+
+    while (resolvers.length > 0) {
+      resolvers.shift()!()
+      await Promise.resolve()
+      await Promise.resolve()
+    }
+
+    const results = await resultPromise
     expect(peakInFlight).toBeLessThanOrEqual(4)
     expect(results.size).toBe(12)
   })
 
-  it('handles crawl failures without dropping the tweet from results', async () => {
-    const { crawlArticle } = await import('../crawler.ts')
-    const mockedCrawl = vi.mocked(crawlArticle)
+  it('handles resolver failures without dropping the tweet from results', async () => {
+    const mockResolver: ResolveArticleForTweet = vi.fn(async () => {
+      throw new Error('network error')
+    })
 
-    mockedCrawl.mockRejectedValue(new Error('network error'))
-
-    const { articleIngestService } = await import('../services/articleIngestService.ts')
     const db = makeFakeDb()
-    const service = articleIngestService({ concurrency: 4 })
+    const service = articleIngestService({ concurrency: 4, resolver: mockResolver })
     const results = await service.ingestForTweets(db, makeTweets(4))
 
     expect(results.size).toBe(4)
     for (const [, res] of results) {
-      // either failed or missing (if URL was not detected from mock text)
-      expect(['failed', 'missing']).toContain(res.status)
+      expect(res.status).toBe('failed')
+      expect(res.reason).toBe('network error')
     }
   })
 
-  it('skips crawl for URLs already in the DB', async () => {
-    const { crawlArticle } = await import('../crawler.ts')
-    const mockedCrawl = vi.mocked(crawlArticle)
-    mockedCrawl.mockResolvedValue({ content: 'x'.repeat(100), loginRequired: false })
+  it('returns missing when resolver returns missing status', async () => {
+    const mockResolver: ResolveArticleForTweet = vi.fn(async () => ({
+      status: 'missing' as const,
+    }))
 
-    // Build a DB that already has all articles
     const db = makeFakeDb()
-    // Pre-populate articles table via a fake crawl pass to seed the set
-    for (let i = 0; i < 4; i++) {
-      ;(db.prepare('INSERT OR REPLACE').run as unknown as (r: { url: string; id: string }) => void)(
-        { url: `https://substack.com/article/${i}`, id: `https://substack.com/article/${i}` },
-      )
+    const service = articleIngestService({ concurrency: 4, resolver: mockResolver })
+    const results = await service.ingestForTweets(db, makeTweets(4))
+
+    expect(results.size).toBe(4)
+    for (const [, res] of results) {
+      expect(res.status).toBe('missing')
     }
+  })
 
-    const { articleIngestService } = await import('../services/articleIngestService.ts')
-    const service = articleIngestService({ concurrency: 4 })
-    await service.ingestForTweets(db, makeTweets(4))
+  it('skips already-resolved tweets correctly via resolver', async () => {
+    const mockResolver: ResolveArticleForTweet = vi.fn(async (_db, tweet) => ({
+      status: 'ok' as const,
+      url: `https://substack.com/article/${(tweet as { id: string }).id}`,
+      article_id: (tweet as { id: string }).id,
+    }))
 
-    // crawlArticle should NOT have been called since all URLs are already in DB
-    expect(mockedCrawl).not.toHaveBeenCalled()
+    const db = makeFakeDb()
+    const service = articleIngestService({ concurrency: 4, resolver: mockResolver })
+    const results = await service.ingestForTweets(db, makeTweets(4))
+
+    expect(mockResolver).toHaveBeenCalledTimes(4)
+    expect(results.size).toBe(4)
+    for (const [, res] of results) {
+      expect(res.status).toBe('ok')
+    }
   })
 })

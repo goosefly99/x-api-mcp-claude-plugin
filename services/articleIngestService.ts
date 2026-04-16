@@ -1,9 +1,12 @@
 /**
  * articleIngestService — concurrent article ingestion with a semaphore cap.
  *
- * Wraps the existing detect → exists-in-db → crawl → upsert logic from
- * auto-crawl.ts and runs it in parallel up to `concurrency` (default 4)
- * simultaneous crawlArticle calls.
+ * Wraps the existing detect → exists-in-db → crawl → upsert logic and runs
+ * it in parallel up to `concurrency` (default 4) simultaneous resolver calls.
+ *
+ * The `resolver` function is injected by the caller (dependency injection) so
+ * this module does not need to import from auto-crawl.ts, eliminating the
+ * circular ESM dependency.
  *
  * Semaphore pattern: a counter + a queue of resolve callbacks.
  * acquire() decrements permits; when 0, it waits. release() increments and
@@ -11,17 +14,21 @@
  */
 
 import type Database from 'better-sqlite3'
-import {
-  resolveArticleForTweet,
-  type ArticleResolution,
-  type DetectableTweet,
-} from './auto-crawl.ts'
+import type {
+  ArticleResolution,
+  DetectableTweet,
+  ResolveArticleForTweet,
+} from './articleTypes.ts'
+
+export type { ArticleResolution, DetectableTweet, ResolveArticleForTweet }
 
 const DEFAULT_CONCURRENCY = 4
 
 export interface ArticleIngestOptions {
-  /** Max simultaneous crawlArticle calls. Defaults to 4. */
+  /** Max simultaneous resolver calls. Defaults to 4. */
   concurrency?: number
+  /** Function that resolves a single tweet's article. Required. */
+  resolver: ResolveArticleForTweet
 }
 
 export interface ArticleIngestService {
@@ -66,10 +73,11 @@ class Semaphore {
 
 /**
  * Factory that returns an ArticleIngestService configured with the given
- * concurrency cap.
+ * concurrency cap and resolver function.
  */
-export function articleIngestService(opts: ArticleIngestOptions = {}): ArticleIngestService {
+export function articleIngestService(opts: ArticleIngestOptions): ArticleIngestService {
   const cap = opts.concurrency ?? DEFAULT_CONCURRENCY
+  const { resolver } = opts
 
   return {
     async ingestForTweets(
@@ -82,7 +90,7 @@ export function articleIngestService(opts: ArticleIngestOptions = {}): ArticleIn
       const tasks = tweets.map(async (tweet) => {
         await sem.acquire()
         try {
-          const res = await resolveArticleForTweet(db, tweet)
+          const res = await resolver(db, tweet)
           out.set(tweet.id, res)
         } catch (err: unknown) {
           const reason = err instanceof Error ? err.message : String(err)

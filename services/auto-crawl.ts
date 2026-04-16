@@ -18,19 +18,11 @@ import type { XTweet } from '../types.ts'
 import { crawlArticle } from '../crawler.ts'
 import { upsertArticle } from '../db/repos/articles.ts'
 import { articleIngestService } from './articleIngestService.ts'
+import type { ArticleResolution, DetectableTweet } from './articleTypes.ts'
 
+// Re-export shared types so existing importers of auto-crawl.ts are unaffected.
+export type { ArticleResolution, DetectableTweet }
 export type ArticleStatus = 'ok' | 'missing' | 'failed'
-
-export interface ArticleResolution {
-  status: ArticleStatus
-  url?: string
-  article_id?: string
-  reason?: string
-}
-
-/** Tweet-shape accepted by the detector — works for both XTweet API payloads
- *  and TweetRow DB rows (which carry the relevant fields as JSON strings). */
-export type DetectableTweet = Pick<XTweet, 'id' | 'text' | 'note_tweet' | 'entities'> | TweetRow
 
 // ── URL detection ────────────────────────────────────────────────
 
@@ -245,7 +237,7 @@ export async function resolveArticlesForTweets(
   tweets: DetectableTweet[],
   concurrency = 4,
 ): Promise<Map<string, ArticleResolution>> {
-  const service = articleIngestService({ concurrency })
+  const service = articleIngestService({ concurrency, resolver: resolveArticleForTweet })
   return service.ingestForTweets(db, tweets)
 }
 
