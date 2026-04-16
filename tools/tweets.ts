@@ -2,7 +2,7 @@ import { xApiRequest, formatTweet, TWEET_FIELDS, USER_FIELDS, EXPANSIONS, MEDIA_
 import type { XTweet } from '../types.ts'
 import { getDb } from '../db/connection.ts'
 import { upsertTweets } from '../db/repos/tweets.ts'
-import { resolveArticlesForTweets, formatArticleLine, type ArticleResolution } from '../services/auto-crawl.ts'
+import { resolveArticlesForTweets, formatArticlesLines, type ArticleResolution } from '../services/auto-crawl.ts'
 
 export async function handleGetTweet(args: Record<string, unknown>) {
   const tweetId = args.tweet_id as string
@@ -30,8 +30,6 @@ export async function handleGetTweet(args: Record<string, unknown>) {
   // Resolve articles BEFORE persisting so article_crawl_status lands in
   // the same transaction as the tweet row.
   const db = getDb()
-  // TODO(X4): Surface all elements of articles[] in the tool response.
-  // For now we keep the legacy single-article display by reading articles[0].
   let articleMap = new Map<string, ArticleResolution[]>()
   if (autoCrawl) {
     try {
@@ -43,8 +41,6 @@ export async function handleGetTweet(args: Record<string, unknown>) {
 
   const statusMap = new Map<string, string>()
   for (const [id, res] of articleMap) {
-    // TODO(X4): tweets.article_crawl_status currently reflects only the first
-    // article's status. Revisit when the envelope fans articles[] to the UI.
     if (res.length > 0) statusMap.set(id, res[0].status)
   }
 
@@ -55,14 +51,11 @@ export async function handleGetTweet(args: Record<string, unknown>) {
   }
 
   const formatted = formatTweet(response.data, response.includes)
-  const firstResolution = articleMap.get(response.data.id)?.[0]
-  const articleLine = firstResolution
-    ? `\n${formatArticleLine(firstResolution)}`
-    : ''
+  const articlesBlock = formatArticlesLines(articleMap.get(response.data.id) ?? [])
   const rateLimitInfo = `\n\n[Rate limit: ${rateLimit.remaining}/${rateLimit.limit} remaining]`
 
   return {
-    content: [{ type: 'text' as const, text: `${formatted}${articleLine}${rateLimitInfo}` }],
+    content: [{ type: 'text' as const, text: `${formatted}${articlesBlock}${rateLimitInfo}` }],
   }
 }
 
@@ -97,7 +90,6 @@ export async function handleGetUserTweets(args: Record<string, unknown>) {
   }
 
   const db = getDb()
-  // TODO(X4): Surface all elements of articles[] in the tool response.
   let articleMap = new Map<string, ArticleResolution[]>()
   if (autoCrawl) {
     try {
@@ -120,9 +112,8 @@ export async function handleGetUserTweets(args: Record<string, unknown>) {
 
   const formatted = response.data
     .map((t) => {
-      const first = articleMap.get(t.id)?.[0]
-      const line = first ? `\n${formatArticleLine(first)}` : ''
-      return `${formatTweet(t, response.includes)}${line}`
+      const articlesBlock = formatArticlesLines(articleMap.get(t.id) ?? [])
+      return `${formatTweet(t, response.includes)}${articlesBlock}`
     })
     .join('\n\n')
   const pagination = response.meta?.next_token

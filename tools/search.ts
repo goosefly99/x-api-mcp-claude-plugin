@@ -2,7 +2,7 @@ import { xApiRequest, formatTweet, TWEET_FIELDS, USER_FIELDS, EXPANSIONS, MEDIA_
 import type { XTweet } from '../types.ts'
 import { getDb } from '../db/connection.ts'
 import { upsertTweets } from '../db/repos/tweets.ts'
-import { resolveArticlesForTweets, formatArticleLine, type ArticleResolution } from '../services/auto-crawl.ts'
+import { resolveArticlesForTweets, formatArticlesLines, type ArticleResolution } from '../services/auto-crawl.ts'
 
 export async function handleSearchTweets(args: Record<string, unknown>) {
   const query = args.query as string
@@ -35,7 +35,6 @@ export async function handleSearchTweets(args: Record<string, unknown>) {
   }
 
   const db = getDb()
-  // TODO(X4): Surface all elements of articles[] in the tool response.
   let articleMap = new Map<string, ArticleResolution[]>()
   if (autoCrawl) {
     try {
@@ -58,9 +57,8 @@ export async function handleSearchTweets(args: Record<string, unknown>) {
 
   const formatted = response.data
     .map((t) => {
-      const first = articleMap.get(t.id)?.[0]
-      const line = first ? `\n${formatArticleLine(first)}` : ''
-      return `${formatTweet(t, response.includes)}${line}`
+      const articlesBlock = formatArticlesLines(articleMap.get(t.id) ?? [])
+      return `${formatTweet(t, response.includes)}${articlesBlock}`
     })
     .join('\n\n')
   const pagination = response.meta?.next_token

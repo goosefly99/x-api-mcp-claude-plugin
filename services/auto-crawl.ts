@@ -327,11 +327,12 @@ export async function resolveArticlesForTweets(
 // ── Output formatting ─────────────────────────────────────────────
 
 /**
- * Produces the one-line summary appended to the tool text output.
+ * Produces the one-line summary for a single ArticleResolution.
+ * Used by formatArticlesLines to build the multi-article block.
  * Examples:
- *   '  article: ok url=https://x.com/.../article/123 id=https://x.com/.../article/123'
- *   '  article: missing'
- *   '  article: failed url=https://... reason=login_required'
+ *   '  articles[0]: ok url=https://x.com/.../article/123 id=https://x.com/.../article/123'
+ *   '  articles[0]: missing'
+ *   '  articles[0]: failed url=https://... reason=login_required'
  */
 export function formatArticleLine(result: ArticleResolution): string {
   switch (result.status) {
@@ -351,4 +352,44 @@ export function formatArticleLine(result: ArticleResolution): string {
     default:
       return '  article: missing'
   }
+}
+
+/**
+ * Formats the full articles[] array for a tweet into a multi-line string block.
+ * Returns an empty string when the array is empty or contains only a single
+ * `missing` entry (no article URLs were detected on the tweet).
+ *
+ * Output shape (one line per article, 1-indexed):
+ *   \n  articles[1]: ok url=https://... id=https://...
+ *   \n  articles[2]: failed url=https://... reason=login_required
+ *
+ * For a tweet with a single ok resolution the output mirrors the old singular
+ * format closely, making diffs readable.
+ */
+export function formatArticlesLines(resolutions: ArticleResolution[]): string {
+  if (!resolutions || resolutions.length === 0) return ''
+  // Single missing entry — no article URLs on the tweet; omit entirely
+  if (resolutions.length === 1 && resolutions[0].status === 'missing') return ''
+
+  return resolutions
+    .map((r, i) => {
+      switch (r.status) {
+        case 'ok': {
+          const parts = [`  articles[${i + 1}]: ok`]
+          if (r.url) parts.push(`url=${r.url}`)
+          if (r.article_id) parts.push(`id=${r.article_id}`)
+          return '\n' + parts.join(' ')
+        }
+        case 'failed': {
+          const parts = [`  articles[${i + 1}]: failed`]
+          if (r.url) parts.push(`url=${r.url}`)
+          if (r.reason) parts.push(`reason=${r.reason}`)
+          return '\n' + parts.join(' ')
+        }
+        case 'missing':
+        default:
+          return `\n  articles[${i + 1}]: missing`
+      }
+    })
+    .join('')
 }

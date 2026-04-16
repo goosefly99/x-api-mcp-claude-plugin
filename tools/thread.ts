@@ -2,7 +2,7 @@ import { xApiRequest, formatTweet, TWEET_FIELDS, USER_FIELDS, EXPANSIONS, MEDIA_
 import type { XTweet } from '../types.ts'
 import { getDb } from '../db/connection.ts'
 import { upsertTweets } from '../db/repos/tweets.ts'
-import { resolveArticlesForTweets, formatArticleLine, type ArticleResolution } from '../services/auto-crawl.ts'
+import { resolveArticlesForTweets, formatArticlesLines, type ArticleResolution } from '../services/auto-crawl.ts'
 
 export async function handleGetThread(args: Record<string, unknown>) {
   const tweetId = args.tweet_id as string
@@ -119,7 +119,6 @@ export async function handleGetThread(args: Record<string, unknown>) {
   // Step 5: Resolve articles BEFORE persisting so article_crawl_status
   // lands in the same transaction as the tweet rows.
   const db = getDb()
-  // TODO(X4): Surface all elements of articles[] in the tool response.
   let articleMap = new Map<string, ArticleResolution[]>()
   if (autoCrawl) {
     try {
@@ -144,9 +143,8 @@ export async function handleGetThread(args: Record<string, unknown>) {
   // Step 6: Format output
   const formatted = allTweets
     .map((t) => {
-      const first = articleMap.get(t.id)?.[0]
-      const line = first ? `\n${formatArticleLine(first)}` : ''
-      return `${formatTweet(t, mergedIncludes)}${line}`
+      const articlesBlock = formatArticlesLines(articleMap.get(t.id) ?? [])
+      return `${formatTweet(t, mergedIncludes)}${articlesBlock}`
     })
     .join('\n\n')
 
