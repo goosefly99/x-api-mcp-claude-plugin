@@ -11,7 +11,7 @@
  *   - Also assert that all 12 results were produced (no drops).
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { articleIngestService } from '../services/articleIngestService.ts'
 import type { DetectableTweet, ArticleResolution, ResolveArticleForTweet } from '../services/articleIngestService.ts'
 import type Database from 'better-sqlite3'
@@ -183,6 +183,96 @@ describe('articleIngestService', () => {
     for (const [, res] of results) {
       expect(res.status).toBe('missing')
     }
+  })
+
+  // ── Timeout tests ──────────────────────────────────────────────────────────
+
+  describe('soft-timeout per article crawl', () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('marks article as failed with reason=timeout when resolver takes 30s (timeout=15s)', async () => {
+      vi.useFakeTimers()
+
+      // A resolver that never resolves (simulates a hung 30s crawl)
+      const neverResolves: ResolveArticleForTweet = vi.fn(
+        () => new Promise<ArticleResolution>(() => {/* intentionally never resolves */}),
+      )
+
+      const db = makeFakeDb()
+      const service = articleIngestService({
+        concurrency: 4,
+        resolver: neverResolves,
+        timeoutMs: 15_000,
+      })
+
+      const tweets = makeTweets(1)
+      const resultPromise = service.ingestForTweets(db, tweets)
+
+      // Advance fake timers by 15s to trigger the timeout
+      await vi.advanceTimersByTimeAsync(15_000)
+
+      const results = await resultPromise
+
+      // Tweet row must still be in the output map (not dropped)
+      expect(results.size).toBe(1)
+
+      const res = results.get('tweet_0')!
+      expect(res).toBeDefined()
+      expect(res.status).toBe('failed')
+      expect(res.reason).toBe('timeout')
+    })
+
+    it('does not time out a fast resolver (resolves before 15s)', async () => {
+      vi.useFakeTimers()
+
+      const fastResolver: ResolveArticleForTweet = vi.fn(async (_db, tweet) => ({
+        status: 'ok' as const,
+        url: `https://substack.com/${(tweet as { id: string }).id}`,
+        article_id: (tweet as { id: string }).id,
+      }))
+
+      const db = makeFakeDb()
+      const service = articleIngestService({
+        concurrency: 4,
+        resolver: fastResolver,
+        timeoutMs: 15_000,
+      })
+
+      const resultPromise = service.ingestForTweets(db, makeTweets(2))
+
+      // Advance only a little — fast resolver already resolved synchronously
+      await vi.advanceTimersByTimeAsync(0)
+
+      const results = await resultPromise
+
+      expect(results.size).toBe(2)
+      for (const [, res] of results) {
+        expect(res.status).toBe('ok')
+      }
+    })
+
+    it('defaults timeoutMs to 15000 when not supplied', async () => {
+      vi.useFakeTimers()
+
+      const neverResolves: ResolveArticleForTweet = vi.fn(
+        () => new Promise<ArticleResolution>(() => {/* intentionally never resolves */}),
+      )
+
+      const db = makeFakeDb()
+      // No timeoutMs — should default to 15_000
+      const service = articleIngestService({ concurrency: 1, resolver: neverResolves })
+
+      const resultPromise = service.ingestForTweets(db, makeTweets(1))
+      await vi.advanceTimersByTimeAsync(15_000)
+
+      const results = await resultPromise
+
+      expect(results.size).toBe(1)
+      expect(results.get('tweet_0')!.status).toBe('failed')
+      expect(results.get('tweet_0')!.reason).toBe('timeout')
+    })
   })
 
   it('skips already-resolved tweets correctly via resolver', async () => {

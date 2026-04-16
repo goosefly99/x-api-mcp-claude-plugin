@@ -23,12 +23,21 @@ import type {
 export type { ArticleResolution, DetectableTweet, ResolveArticleForTweet }
 
 const DEFAULT_CONCURRENCY = 4
+const DEFAULT_TIMEOUT_MS = 15_000
 
 export interface ArticleIngestOptions {
   /** Max simultaneous resolver calls. Defaults to 4. */
   concurrency?: number
   /** Function that resolves a single tweet's article. Required. */
   resolver: ResolveArticleForTweet
+  /**
+   * Soft timeout in milliseconds for each resolver call. Defaults to 15 000.
+   * If the resolver has not returned within this window, the article is
+   * recorded as `{ status: 'failed', reason: 'timeout' }` and the service
+   * moves on.  The resolver itself is NOT cancelled — Playwright (or whatever
+   * the resolver uses) may continue running in the background.
+   */
+  timeoutMs?: number
 }
 
 export interface ArticleIngestService {
@@ -69,14 +78,27 @@ class Semaphore {
   }
 }
 
+// ── Timeout helper ───────────────────────────────────────────────────────────
+
+/**
+ * Returns a Promise that resolves (never rejects) with a timed-out
+ * ArticleResolution sentinel after `ms` milliseconds.
+ */
+function timeoutResolution(ms: number): Promise<ArticleResolution> {
+  return new Promise<ArticleResolution>((resolve) => {
+    setTimeout(() => resolve({ status: 'failed', reason: 'timeout' }), ms)
+  })
+}
+
 // ── Factory ─────────────────────────────────────────────────────────────────
 
 /**
  * Factory that returns an ArticleIngestService configured with the given
- * concurrency cap and resolver function.
+ * concurrency cap, resolver function, and per-article timeout.
  */
 export function articleIngestService(opts: ArticleIngestOptions): ArticleIngestService {
   const cap = opts.concurrency ?? DEFAULT_CONCURRENCY
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const { resolver } = opts
 
   return {
@@ -90,12 +112,21 @@ export function articleIngestService(opts: ArticleIngestOptions): ArticleIngestS
       const tasks = tweets.map(async (tweet) => {
         await sem.acquire()
         try {
-          const res = await resolver(db, tweet)
+          // Race the resolver against a soft timeout.  The timeout promise
+          // resolves (not rejects) so Promise.race always settles to a valid
+          // ArticleResolution.  The resolver is NOT cancelled — it may
+          // continue running in the background (e.g. a Playwright session
+          // that can't be interrupted mid-flight).
+          const res = await Promise.race([
+            resolver(db, tweet),
+            timeoutResolution(timeoutMs),
+          ])
           out.set(tweet.id, res)
         } catch (err: unknown) {
           const reason = err instanceof Error ? err.message : String(err)
           out.set(tweet.id, { status: 'failed', reason })
         } finally {
+          // Semaphore must release regardless of how the race settled.
           sem.release()
         }
       })
