@@ -20,6 +20,8 @@ export async function handleBrowserLogin(
 export async function handleCrawlArticle(
   args: Record<string, unknown>,
 ) {
+  process.stderr.write('[x_crawl_article] manual override — not called by ingest pipeline\n')
+
   const input = args.url as string
   if (!input) throw new Error('url is required')
 
