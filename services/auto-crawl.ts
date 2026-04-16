@@ -327,34 +327,6 @@ export async function resolveArticlesForTweets(
 // ── Output formatting ─────────────────────────────────────────────
 
 /**
- * Produces the one-line summary for a single ArticleResolution.
- * Used by formatArticlesLines to build the multi-article block.
- * Examples:
- *   '  articles[0]: ok url=https://x.com/.../article/123 id=https://x.com/.../article/123'
- *   '  articles[0]: missing'
- *   '  articles[0]: failed url=https://... reason=login_required'
- */
-export function formatArticleLine(result: ArticleResolution): string {
-  switch (result.status) {
-    case 'ok': {
-      const parts = ['  article: ok']
-      if (result.url) parts.push(`url=${result.url}`)
-      if (result.article_id) parts.push(`id=${result.article_id}`)
-      return parts.join(' ')
-    }
-    case 'failed': {
-      const parts = ['  article: failed']
-      if (result.url) parts.push(`url=${result.url}`)
-      if (result.reason) parts.push(`reason=${result.reason}`)
-      return parts.join(' ')
-    }
-    case 'missing':
-    default:
-      return '  article: missing'
-  }
-}
-
-/**
  * Formats the full articles[] array for a tweet into a multi-line string block.
  * Returns an empty string when the array is empty or contains only a single
  * `missing` entry (no article URLs were detected on the tweet).
