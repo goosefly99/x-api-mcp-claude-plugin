@@ -87,6 +87,20 @@ export function queryArticles(db: Database.Database, opts: QueryArticlesOpts = {
   `).all(...params) as ArticleRow[]
 }
 
+/**
+ * Looks up a single article row by its URL. Returns the row or undefined.
+ */
+export function getArticleByUrl(db: Database.Database, url: string): ArticleRow | undefined {
+  return db.prepare('SELECT * FROM articles WHERE url = ? LIMIT 1').get(url) as ArticleRow | undefined
+}
+
+/**
+ * Looks up a single article row by its id (tweet_id for API articles). Returns the row or undefined.
+ */
+export function getArticleById(db: Database.Database, id: string): ArticleRow | undefined {
+  return db.prepare('SELECT * FROM articles WHERE id = ? LIMIT 1').get(id) as ArticleRow | undefined
+}
+
 // ── tweet_articles join table (schema v5) ───────────────────────────────────
 
 /**
