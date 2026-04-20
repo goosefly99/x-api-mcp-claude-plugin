@@ -14,7 +14,7 @@
 
 import type Database from 'better-sqlite3'
 import type { TweetRow } from '../db/types.ts'
-import type { XTweet } from '../types.ts'
+import type { TweetArticlesEnvelope, XTweet } from '../types.ts'
 import { crawlArticle } from '../crawler.ts'
 import { upsertArticle, insertTweetArticle } from '../db/repos/articles.ts'
 import { articleIngestService } from './articleIngestService.ts'
@@ -281,24 +281,26 @@ export async function resolveArticleForTweet(
  * Side effect: persists one `tweet_articles` row per URL resolution that
  * carries a URL (i.e. every non-`missing` result).  Persistence is wrapped
  * in a try/catch so a DB write failure never cascades into the caller's
- * auto-crawl flow — the in-memory Map is always returned.
+ * auto-crawl flow — the envelope is always returned.
  *
- * Post-X3: returns `Map<tweet_id, ArticleResolution[]>` (plural array per
- * tweet) to model the one-to-many tweet→articles relationship.
+ * Post-X3 / v0.4.0: returns `TweetArticlesEnvelope` — an array of
+ * `{ tweetId, articles }` entries — to model the one-to-many
+ * tweet→articles relationship.  Replaces the prior `Map<tweet_id,
+ * ArticleResolution[]>` return shape.
  */
 export async function resolveArticlesForTweets(
   db: Database.Database,
   tweets: DetectableTweet[],
   concurrency = 4,
-): Promise<Map<string, ArticleResolution[]>> {
+): Promise<TweetArticlesEnvelope> {
   const service = articleIngestService({ concurrency, resolver: resolveArticlesForTweet })
-  const map = await service.ingestForTweets(db, tweets)
+  const envelope = await service.ingestForTweets(db, tweets)
 
   // Persist each resolution to tweet_articles.  One row per URL — `missing`
   // resolutions have no URL/article_id and so are NOT written (the tweet's
   // overall status is already captured in tweets.article_crawl_status).
-  for (const [tweetId, resolutions] of map) {
-    for (const r of resolutions) {
+  for (const { tweetId, articles } of envelope) {
+    for (const r of articles) {
       if (r.status === 'missing') continue
       const url = r.url
       const articleId = r.article_id ?? url
@@ -321,7 +323,7 @@ export async function resolveArticlesForTweets(
     }
   }
 
-  return map
+  return envelope
 }
 
 // ── Output formatting ─────────────────────────────────────────────

@@ -76,15 +76,15 @@ describe('formatArticlesLines', () => {
 //
 // The mock articleMap is injected so we can assert on the text output.
 
-const TWO_ARTICLE_MAP = new Map<string, ArticleResolution[]>([
-  [
-    'tweet_abc',
-    [
+const TWO_ARTICLE_ENVELOPE: Array<{ tweetId: string; articles: ArticleResolution[] }> = [
+  {
+    tweetId: 'tweet_abc',
+    articles: [
       { status: 'ok', url: 'https://substack.com/alpha', article_id: 'https://substack.com/alpha' },
       { status: 'failed', url: 'https://medium.com/beta', reason: 'login_required' },
     ],
-  ],
-])
+  },
+]
 
 function makeBaseTweet(id = 'tweet_abc') {
   return {
@@ -121,7 +121,7 @@ describe('handleGetTweet — plural articles in output', () => {
       const actual = await vi.importActual('../services/auto-crawl.ts') as Record<string, unknown>
       return {
         ...actual,
-        resolveArticlesForTweets: vi.fn().mockResolvedValue(TWO_ARTICLE_MAP),
+        resolveArticlesForTweets: vi.fn().mockResolvedValue(TWO_ARTICLE_ENVELOPE),
       }
     })
 
@@ -157,7 +157,7 @@ describe('handleGetUserTweets — plural articles in output', () => {
       const actual = await vi.importActual('../services/auto-crawl.ts') as Record<string, unknown>
       return {
         ...actual,
-        resolveArticlesForTweets: vi.fn().mockResolvedValue(TWO_ARTICLE_MAP),
+        resolveArticlesForTweets: vi.fn().mockResolvedValue(TWO_ARTICLE_ENVELOPE),
       }
     })
 
@@ -191,7 +191,7 @@ describe('handleGetBookmarks — plural articles in output', () => {
       const actual = await vi.importActual('../services/auto-crawl.ts') as Record<string, unknown>
       return {
         ...actual,
-        resolveArticlesForTweets: vi.fn().mockResolvedValue(TWO_ARTICLE_MAP),
+        resolveArticlesForTweets: vi.fn().mockResolvedValue(TWO_ARTICLE_ENVELOPE),
       }
     })
 
@@ -225,7 +225,7 @@ describe('handleSearchTweets — plural articles in output', () => {
       const actual = await vi.importActual('../services/auto-crawl.ts') as Record<string, unknown>
       return {
         ...actual,
-        resolveArticlesForTweets: vi.fn().mockResolvedValue(TWO_ARTICLE_MAP),
+        resolveArticlesForTweets: vi.fn().mockResolvedValue(TWO_ARTICLE_ENVELOPE),
       }
     })
 
@@ -268,7 +268,7 @@ describe('handleGetThread — plural articles in output', () => {
       const actual = await vi.importActual('../services/auto-crawl.ts') as Record<string, unknown>
       return {
         ...actual,
-        resolveArticlesForTweets: vi.fn().mockResolvedValue(TWO_ARTICLE_MAP),
+        resolveArticlesForTweets: vi.fn().mockResolvedValue(TWO_ARTICLE_ENVELOPE),
       }
     })
 

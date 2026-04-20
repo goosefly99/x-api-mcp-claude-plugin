@@ -158,6 +158,10 @@ export interface XRateLimitInfo {
 
 // ── Article envelope (X3 refactor: singular → plural) ─────────────────────────
 
+import { z } from 'zod'
+import type { ArticleResolution } from './services/articleTypes.ts'
+import { articleResolutionSchema } from './services/articleTypes.ts'
+
 /**
  * A single resolved article linked to a tweet.  Re-exported here so tool-layer
  * consumers can import `Article` without reaching into `services/articleTypes`.
@@ -167,15 +171,30 @@ export interface XRateLimitInfo {
 export type { ArticleResolution as Article } from './services/articleTypes.ts'
 
 /**
- * Per-tweet envelope shape produced by `resolveArticlesForTweets`.
+ * Per-tweet entry in the envelope returned by `resolveArticlesForTweets`.
  *   { tweetId: 'abc', articles: [Article, Article] }
- *
- * NOTE: This is the logical shape; the service currently returns
- * `Map<tweetId, Article[]>` rather than an object-shaped envelope.  The
- * interface below documents the contract for future consumers (e.g. X4
- * tool-surface rework) without forcing a map→object migration in this PR.
  */
-export interface TweetArticlesEnvelope {
+export interface TweetArticlesEnvelopeEntry {
   tweetId: string
-  articles: import('./services/articleTypes.ts').ArticleResolution[]
+  articles: ArticleResolution[]
 }
+
+/**
+ * Array of per-tweet article-resolution envelopes returned by
+ * `articleIngestService.ingestForTweets` and `resolveArticlesForTweets`.
+ * Replaces the prior `Map<tweetId, Article[]>` return shape — now a plain
+ * array so downstream consumers can `.map()` / iterate uniformly and validate
+ * the whole payload with a single zod schema.
+ */
+export type TweetArticlesEnvelope = TweetArticlesEnvelopeEntry[]
+
+/**
+ * Runtime-validation schema mirroring `TweetArticlesEnvelope`.  Exposed for
+ * downstream contract-probe consumers (orchestrator probe-4).
+ */
+export const tweetArticlesEnvelopeSchema = z.array(
+  z.object({
+    tweetId: z.string(),
+    articles: z.array(articleResolutionSchema),
+  }),
+)

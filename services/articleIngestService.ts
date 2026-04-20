@@ -19,11 +19,12 @@ import type {
   DetectableTweet,
   ResolveArticleForTweet,
 } from './articleTypes.ts'
+import type { TweetArticlesEnvelope } from '../types.ts'
 
 export type { ArticleResolution, DetectableTweet, ResolveArticleForTweet }
 
 const DEFAULT_CONCURRENCY = 4
-const DEFAULT_TIMEOUT_MS = 15_000
+export const DEFAULT_TIMEOUT_MS = 15_000
 
 export interface ArticleIngestOptions {
   /** Max simultaneous resolver calls. Defaults to 4. */
@@ -44,7 +45,7 @@ export interface ArticleIngestService {
   ingestForTweets(
     db: Database.Database,
     tweets: DetectableTweet[],
-  ): Promise<Map<string, ArticleResolution[]>>
+  ): Promise<TweetArticlesEnvelope>
 }
 
 // ── Semaphore ──────────────────────────────────────────────────────────────
@@ -106,11 +107,17 @@ export function articleIngestService(opts: ArticleIngestOptions): ArticleIngestS
     async ingestForTweets(
       db: Database.Database,
       tweets: DetectableTweet[],
-    ): Promise<Map<string, ArticleResolution[]>> {
-      const out = new Map<string, ArticleResolution[]>()
+    ): Promise<TweetArticlesEnvelope> {
+      // Build the envelope array directly (no intermediate Map allocation).
+      // Slot order matches `tweets` input order; each slot is filled once
+      // the corresponding task settles.
+      const out: TweetArticlesEnvelope = tweets.map((tweet) => ({
+        tweetId: tweet.id,
+        articles: [] as ArticleResolution[],
+      }))
       const sem = new Semaphore(cap)
 
-      const tasks = tweets.map(async (tweet) => {
+      const tasks = tweets.map(async (tweet, idx) => {
         await sem.acquire()
         try {
           // Race the resolver against a soft timeout.  The timeout promise
@@ -126,10 +133,10 @@ export function articleIngestService(opts: ArticleIngestOptions): ArticleIngestS
             resolver(db, tweet),
             timeoutResolution(timeoutMs),
           ])
-          out.set(tweet.id, res)
+          out[idx].articles = res
         } catch (err: unknown) {
           const reason = err instanceof Error ? err.message : String(err)
-          out.set(tweet.id, [{ status: 'failed', reason }])
+          out[idx].articles = [{ status: 'failed', reason }]
         } finally {
           // Semaphore must release regardless of how the race settled.
           sem.release()

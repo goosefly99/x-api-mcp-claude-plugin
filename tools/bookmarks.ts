@@ -1,5 +1,5 @@
 import { xApiRequest, formatTweet, TWEET_FIELDS, USER_FIELDS, EXPANSIONS, MEDIA_FIELDS } from '../client.ts'
-import type { XTweet, XUser } from '../types.ts'
+import type { TweetArticlesEnvelope, XTweet, XUser } from '../types.ts'
 import { getDb } from '../db/connection.ts'
 import { upsertTweets } from '../db/repos/tweets.ts'
 import { resolveArticlesForTweets, formatArticlesLines, type ArticleResolution } from '../services/auto-crawl.ts'
@@ -46,18 +46,20 @@ export async function handleGetBookmarks(args: Record<string, unknown>) {
   }
 
   const db = getDb()
-  let articleMap = new Map<string, ArticleResolution[]>()
+  let articleEnvelope: TweetArticlesEnvelope = []
   if (autoCrawl) {
     try {
-      articleMap = await resolveArticlesForTweets(db, response.data)
+      articleEnvelope = await resolveArticlesForTweets(db, response.data)
     } catch (err) {
       process.stderr.write(`x-api: auto-crawl failed (bookmarks): ${err}\n`)
     }
   }
 
+  const articlesById = new Map<string, ArticleResolution[]>()
   const statusMap = new Map<string, string>()
-  for (const [id, res] of articleMap) {
-    if (res.length > 0) statusMap.set(id, res[0].status)
+  for (const { tweetId: id, articles } of articleEnvelope) {
+    articlesById.set(id, articles)
+    if (articles.length > 0) statusMap.set(id, articles[0].status)
   }
 
   try {
@@ -68,7 +70,7 @@ export async function handleGetBookmarks(args: Record<string, unknown>) {
 
   const formatted = response.data
     .map((t) => {
-      const articlesBlock = formatArticlesLines(articleMap.get(t.id) ?? [])
+      const articlesBlock = formatArticlesLines(articlesById.get(t.id) ?? [])
       return `${formatTweet(t, response.includes)}${articlesBlock}`
     })
     .join('\n\n')

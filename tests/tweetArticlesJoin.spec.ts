@@ -6,8 +6,8 @@
  *   - `detectArticleUrls(tweet)` returns ALL article-like URLs (plural).
  *   - `resolveArticlesForTweet(db, tweet)` returns `ArticleResolution[]`,
  *     one entry per URL.
- *   - `resolveArticlesForTweets(db, tweets)` returns
- *     `Map<tweetId, ArticleResolution[]>` (plural).
+ *   - `resolveArticlesForTweets(db, tweets)` returns a
+ *     `TweetArticlesEnvelope` — array of `{ tweetId, articles }` entries.
  *   - One `tweet_articles` row is persisted per URL resolution.
  *
  * This spec uses a real in-memory SQLite DB (better-sqlite3) so we can
@@ -118,12 +118,14 @@ describe('X3: tweet_articles one-to-many join + articles[] envelope', () => {
 
     const envelope = await resolveArticlesForTweets(db, [tweet as DetectableTweet])
 
-    // (b) Envelope: Map<tweetId, ArticleResolution[]>
-    const resolutions = envelope.get('tweet_multi')
-    expect(resolutions).toBeDefined()
+    // (b) Envelope: TweetArticlesEnvelope — array of { tweetId, articles }
+    expect(Array.isArray(envelope)).toBe(true)
+    const entry = envelope.find((e) => e.tweetId === 'tweet_multi')
+    expect(entry).toBeDefined()
+    const resolutions = entry!.articles
     expect(Array.isArray(resolutions)).toBe(true)
     expect(resolutions).toHaveLength(2)
-    expect(resolutions!.every((r) => r.status === 'ok')).toBe(true)
+    expect(resolutions.every((r) => r.status === 'ok')).toBe(true)
 
     // (a) 2 tweet_articles rows in DB
     const joinRows = getTweetArticles(db, 'tweet_multi')
@@ -165,8 +167,8 @@ describe('X3: tweet_articles one-to-many join + articles[] envelope', () => {
       VALUES (@id, NULL, NULL, NULL, 'x', 'crawl', @url, @saved_at)
     `).run({ id: 'https://medium.com/@x/beta', url: 'https://medium.com/@x/beta', saved_at: now })
 
-    const map = await resolveArticlesForTweets(db, [tweet as DetectableTweet])
-    const articles = map.get('tweet_multi')!
+    const envelope = await resolveArticlesForTweets(db, [tweet as DetectableTweet])
+    const articles = envelope.find((e) => e.tweetId === 'tweet_multi')!.articles
     expect(articles).toHaveLength(2)
     // Shape: each element is an ArticleResolution with an article_id
     for (const a of articles) {
@@ -194,16 +196,17 @@ describe('X3: tweet_articles one-to-many join + articles[] envelope', () => {
     const envelope = await service.ingestForTweets(db, [tweet as DetectableTweet])
 
     // (1) Envelope has 2 resolutions for the tweet
-    const resolutions = envelope.get('tweet_multi')
-    expect(resolutions).toBeDefined()
+    const entry = envelope.find((e) => e.tweetId === 'tweet_multi')
+    expect(entry).toBeDefined()
+    const resolutions = entry!.articles
     expect(resolutions).toHaveLength(2)
-    expect(resolutions![0].status).toBe('ok')
-    expect(resolutions![1].status).toBe('failed')
-    expect((resolutions![1] as { reason?: string }).reason).toBe('network error')
+    expect(resolutions[0].status).toBe('ok')
+    expect(resolutions[1].status).toBe('failed')
+    expect((resolutions[1] as { reason?: string }).reason).toBe('network error')
 
     // (2) Persist the resolutions to tweet_articles (mirrors resolveArticlesForTweets logic)
     const { insertTweetArticle } = await import('../db/repos/articles.ts')
-    for (const r of resolutions!) {
+    for (const r of resolutions) {
       if (r.status === 'missing') continue
       const url = r.url
       const articleId = r.article_id ?? url

@@ -3,6 +3,7 @@
  * dependency between auto-crawl.ts and articleIngestService.ts.
  */
 
+import { z } from 'zod'
 import type { XTweet } from '../types.ts'
 import type { TweetRow } from '../db/types.ts'
 
@@ -14,6 +15,18 @@ export interface ArticleResolution {
   article_id?: string
   reason?: string
 }
+
+/**
+ * Runtime-validation schema for a single ArticleResolution entry.  Used by
+ * `tweetArticlesEnvelopeSchema` and exposed for downstream contract-probe
+ * consumers (orchestrator probe-4) to validate the shape of article payloads.
+ */
+export const articleResolutionSchema = z.object({
+  status: z.enum(['ok', 'missing', 'failed']),
+  url: z.string().optional(),
+  article_id: z.string().optional(),
+  reason: z.string().optional(),
+})
 
 /** Tweet-shape accepted by the detector — works for both XTweet API payloads
  *  and TweetRow DB rows (which carry the relevant fields as JSON strings). */

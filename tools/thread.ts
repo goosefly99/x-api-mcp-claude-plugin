@@ -1,5 +1,5 @@
 import { xApiRequest, formatTweet, TWEET_FIELDS, USER_FIELDS, EXPANSIONS, MEDIA_FIELDS } from '../client.ts'
-import type { XTweet } from '../types.ts'
+import type { TweetArticlesEnvelope, XTweet } from '../types.ts'
 import { getDb } from '../db/connection.ts'
 import { upsertTweets } from '../db/repos/tweets.ts'
 import { resolveArticlesForTweets, formatArticlesLines, type ArticleResolution } from '../services/auto-crawl.ts'
@@ -119,18 +119,20 @@ export async function handleGetThread(args: Record<string, unknown>) {
   // Step 5: Resolve articles BEFORE persisting so article_crawl_status
   // lands in the same transaction as the tweet rows.
   const db = getDb()
-  let articleMap = new Map<string, ArticleResolution[]>()
+  let articleEnvelope: TweetArticlesEnvelope = []
   if (autoCrawl) {
     try {
-      articleMap = await resolveArticlesForTweets(db, allTweets)
+      articleEnvelope = await resolveArticlesForTweets(db, allTweets)
     } catch (err) {
       process.stderr.write(`x-api: auto-crawl failed (thread): ${err}\n`)
     }
   }
 
+  const articlesById = new Map<string, ArticleResolution[]>()
   const statusMap = new Map<string, string>()
-  for (const [id, res] of articleMap) {
-    if (res.length > 0) statusMap.set(id, res[0].status)
+  for (const { tweetId: id, articles } of articleEnvelope) {
+    articlesById.set(id, articles)
+    if (articles.length > 0) statusMap.set(id, articles[0].status)
   }
 
   // Persist to DB
@@ -143,7 +145,7 @@ export async function handleGetThread(args: Record<string, unknown>) {
   // Step 6: Format output
   const formatted = allTweets
     .map((t) => {
-      const articlesBlock = formatArticlesLines(articleMap.get(t.id) ?? [])
+      const articlesBlock = formatArticlesLines(articlesById.get(t.id) ?? [])
       return `${formatTweet(t, mergedIncludes)}${articlesBlock}`
     })
     .join('\n\n')

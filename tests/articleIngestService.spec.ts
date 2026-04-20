@@ -115,7 +115,7 @@ describe('articleIngestService', () => {
 
     expect(peakInFlight).toBe(4)           // cap was reached exactly
     expect(peakInFlight).toBeLessThanOrEqual(4) // cap was never exceeded
-    expect(results.size).toBe(12)          // all tweets processed
+    expect(results).toHaveLength(12)          // all tweets processed
   })
 
   it('defaults to concurrency 4 when no concurrency option is supplied', async () => {
@@ -155,7 +155,7 @@ describe('articleIngestService', () => {
 
     const results = await resultPromise
     expect(peakInFlight).toBeLessThanOrEqual(4)
-    expect(results.size).toBe(12)
+    expect(results).toHaveLength(12)
   })
 
   it('handles resolver failures without dropping the tweet from results', async () => {
@@ -167,11 +167,12 @@ describe('articleIngestService', () => {
     const service = articleIngestService({ concurrency: 4, resolver: mockResolver })
     const results = await service.ingestForTweets(db, makeTweets(4))
 
-    expect(results.size).toBe(4)
-    // Post-X3: each Map value is an ArticleResolution[]. A rejected resolver
-    // maps to a single-element `[{ status: 'failed', reason }]` array so
-    // consumers always see at least one entry per tweet.
-    for (const [, res] of results) {
+    expect(results).toHaveLength(4)
+    // Post-X3 / v0.4.0: envelope is an array of `{ tweetId, articles }` entries.
+    // A rejected resolver maps to a single-element
+    // `[{ status: 'failed', reason }]` array so consumers always see at least
+    // one entry per tweet.
+    for (const { articles: res } of results) {
       expect(res).toHaveLength(1)
       expect(res[0].status).toBe('failed')
       expect(res[0].reason).toBe('network error')
@@ -187,8 +188,8 @@ describe('articleIngestService', () => {
     const service = articleIngestService({ concurrency: 4, resolver: mockResolver })
     const results = await service.ingestForTweets(db, makeTweets(4))
 
-    expect(results.size).toBe(4)
-    for (const [, res] of results) {
+    expect(results).toHaveLength(4)
+    for (const { articles: res } of results) {
       expect(res).toHaveLength(1)
       expect(res[0].status).toBe('missing')
     }
@@ -224,11 +225,12 @@ describe('articleIngestService', () => {
 
       const results = await resultPromise
 
-      // Tweet row must still be in the output map (not dropped)
-      expect(results.size).toBe(1)
+      // Tweet row must still be in the output envelope (not dropped)
+      expect(results).toHaveLength(1)
 
-      const res = results.get('tweet_0')!
-      expect(res).toBeDefined()
+      const entry = results.find((e) => e.tweetId === 'tweet_0')!
+      expect(entry).toBeDefined()
+      const res = entry.articles
       expect(res).toHaveLength(1)
       expect(res[0].status).toBe('failed')
       expect(res[0].reason).toBe('timeout')
@@ -259,8 +261,8 @@ describe('articleIngestService', () => {
 
       const results = await resultPromise
 
-      expect(results.size).toBe(2)
-      for (const [, res] of results) {
+      expect(results).toHaveLength(2)
+      for (const { articles: res } of results) {
         expect(res).toHaveLength(1)
         expect(res[0].status).toBe('ok')
       }
@@ -282,8 +284,8 @@ describe('articleIngestService', () => {
 
       const results = await resultPromise
 
-      expect(results.size).toBe(1)
-      const r0 = results.get('tweet_0')!
+      expect(results).toHaveLength(1)
+      const r0 = results.find((e) => e.tweetId === 'tweet_0')!.articles
       expect(r0).toHaveLength(1)
       expect(r0[0].status).toBe('failed')
       expect(r0[0].reason).toBe('timeout')
@@ -304,8 +306,8 @@ describe('articleIngestService', () => {
     const results = await service.ingestForTweets(db, makeTweets(4))
 
     expect(mockResolver).toHaveBeenCalledTimes(4)
-    expect(results.size).toBe(4)
-    for (const [, res] of results) {
+    expect(results).toHaveLength(4)
+    for (const { articles: res } of results) {
       expect(res).toHaveLength(1)
       expect(res[0].status).toBe('ok')
     }
