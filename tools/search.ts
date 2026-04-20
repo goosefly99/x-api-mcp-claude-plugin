@@ -3,6 +3,7 @@ import type { TweetArticlesEnvelope, XTweet } from '../types.ts'
 import { getDb } from '../db/connection.ts'
 import { upsertTweets } from '../db/repos/tweets.ts'
 import { resolveArticlesForTweets, formatArticlesLines, type ArticleResolution } from '../services/auto-crawl.ts'
+import { withFailureIsolation } from '../services/handlerWrapper.ts'
 
 export async function handleSearchTweets(args: Record<string, unknown>) {
   const query = args.query as string
@@ -34,14 +35,18 @@ export async function handleSearchTweets(args: Record<string, unknown>) {
     }
   }
 
+  // Local-binding so the closure below retains the narrowed non-undefined type.
+  const tweets = response.data
+
   const db = getDb()
   let articleEnvelope: TweetArticlesEnvelope = []
   if (autoCrawl) {
-    try {
-      articleEnvelope = await resolveArticlesForTweets(db, response.data)
-    } catch (err) {
-      process.stderr.write(`x-api: auto-crawl failed (search): ${err}\n`)
-    }
+    const result = await withFailureIsolation(
+      'x_search_tweets',
+      tweets.length,
+      () => resolveArticlesForTweets(db, tweets),
+    )
+    if (result) articleEnvelope = result
   }
 
   const articlesById = new Map<string, ArticleResolution[]>()
@@ -52,12 +57,12 @@ export async function handleSearchTweets(args: Record<string, unknown>) {
   }
 
   try {
-    upsertTweets(db, response.data, response.includes, 'search', statusMap)
+    upsertTweets(db, tweets, response.includes, 'search', statusMap)
   } catch (err) {
     process.stderr.write(`x-api: DB save failed (search): ${err}\n`)
   }
 
-  const formatted = response.data
+  const formatted = tweets
     .map((t) => {
       const articlesBlock = formatArticlesLines(articlesById.get(t.id) ?? [])
       return `${formatTweet(t, response.includes)}${articlesBlock}`
@@ -71,7 +76,7 @@ export async function handleSearchTweets(args: Record<string, unknown>) {
   return {
     content: [{
       type: 'text' as const,
-      text: `Found ${response.meta?.result_count ?? response.data.length} tweets:\n\n${formatted}${pagination}${rateLimitInfo}`,
+      text: `Found ${response.meta?.result_count ?? tweets.length} tweets:\n\n${formatted}${pagination}${rateLimitInfo}`,
     }],
   }
 }

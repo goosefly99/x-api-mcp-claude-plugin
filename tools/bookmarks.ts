@@ -3,6 +3,7 @@ import type { TweetArticlesEnvelope, XTweet, XUser } from '../types.ts'
 import { getDb } from '../db/connection.ts'
 import { upsertTweets } from '../db/repos/tweets.ts'
 import { resolveArticlesForTweets, formatArticlesLines, type ArticleResolution } from '../services/auto-crawl.ts'
+import { withFailureIsolation } from '../services/handlerWrapper.ts'
 
 let cachedUserId: string | null = null
 
@@ -45,14 +46,21 @@ export async function handleGetBookmarks(args: Record<string, unknown>) {
     }
   }
 
+  // Local-binding so the closure below retains the narrowed non-undefined type.
+  const tweets = response.data
+
   const db = getDb()
   let articleEnvelope: TweetArticlesEnvelope = []
   if (autoCrawl) {
-    try {
-      articleEnvelope = await resolveArticlesForTweets(db, response.data)
-    } catch (err) {
-      process.stderr.write(`x-api: auto-crawl failed (bookmarks): ${err}\n`)
-    }
+    // withFailureIsolation: article-resolution failures (throws or
+    // soft-timeout) resolve to `null` here — the parent tweet upsert below
+    // runs regardless so tweet rows are never lost on article failure.
+    const result = await withFailureIsolation(
+      'x_get_bookmarks',
+      tweets.length,
+      () => resolveArticlesForTweets(db, tweets),
+    )
+    if (result) articleEnvelope = result
   }
 
   const articlesById = new Map<string, ArticleResolution[]>()
@@ -63,12 +71,12 @@ export async function handleGetBookmarks(args: Record<string, unknown>) {
   }
 
   try {
-    upsertTweets(db, response.data, response.includes, 'bookmarks', statusMap)
+    upsertTweets(db, tweets, response.includes, 'bookmarks', statusMap)
   } catch (err) {
     process.stderr.write(`x-api: DB save failed (bookmarks): ${err}\n`)
   }
 
-  const formatted = response.data
+  const formatted = tweets
     .map((t) => {
       const articlesBlock = formatArticlesLines(articlesById.get(t.id) ?? [])
       return `${formatTweet(t, response.includes)}${articlesBlock}`
@@ -82,7 +90,7 @@ export async function handleGetBookmarks(args: Record<string, unknown>) {
   return {
     content: [{
       type: 'text' as const,
-      text: `${response.meta?.result_count ?? response.data.length} bookmarks:\n\n${formatted}${pagination}${rateLimitInfo}`,
+      text: `${response.meta?.result_count ?? tweets.length} bookmarks:\n\n${formatted}${pagination}${rateLimitInfo}`,
     }],
   }
 }

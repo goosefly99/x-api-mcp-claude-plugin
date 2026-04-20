@@ -3,6 +3,7 @@ import type { TweetArticlesEnvelope, XTweet } from '../types.ts'
 import { getDb } from '../db/connection.ts'
 import { upsertTweets } from '../db/repos/tweets.ts'
 import { resolveArticlesForTweets, formatArticlesLines, type ArticleResolution } from '../services/auto-crawl.ts'
+import { withFailureIsolation } from '../services/handlerWrapper.ts'
 
 export async function handleGetTweet(args: Record<string, unknown>) {
   const tweetId = args.tweet_id as string
@@ -27,16 +28,21 @@ export async function handleGetTweet(args: Record<string, unknown>) {
     }
   }
 
+  // Local-binding so the closure passed to withFailureIsolation retains
+  // the narrowed non-undefined type after the guard above.
+  const tweet = response.data
+
   // Resolve articles BEFORE persisting so article_crawl_status lands in
   // the same transaction as the tweet row.
   const db = getDb()
   let articleEnvelope: TweetArticlesEnvelope = []
   if (autoCrawl) {
-    try {
-      articleEnvelope = await resolveArticlesForTweets(db, [response.data])
-    } catch (err) {
-      process.stderr.write(`x-api: auto-crawl failed (get_tweet): ${err}\n`)
-    }
+    const result = await withFailureIsolation(
+      'x_get_tweet',
+      1,
+      () => resolveArticlesForTweets(db, [tweet]),
+    )
+    if (result) articleEnvelope = result
   }
 
   const articlesById = new Map<string, ArticleResolution[]>()
@@ -47,13 +53,13 @@ export async function handleGetTweet(args: Record<string, unknown>) {
   }
 
   try {
-    upsertTweets(db, [response.data], response.includes, 'get_tweet', statusMap)
+    upsertTweets(db, [tweet], response.includes, 'get_tweet', statusMap)
   } catch (err) {
     process.stderr.write(`x-api: DB save failed (get_tweet): ${err}\n`)
   }
 
-  const formatted = formatTweet(response.data, response.includes)
-  const articlesBlock = formatArticlesLines(articlesById.get(response.data.id) ?? [])
+  const formatted = formatTweet(tweet, response.includes)
+  const articlesBlock = formatArticlesLines(articlesById.get(tweet.id) ?? [])
   const rateLimitInfo = `\n\n[Rate limit: ${rateLimit.remaining}/${rateLimit.limit} remaining]`
 
   return {
@@ -91,14 +97,18 @@ export async function handleGetUserTweets(args: Record<string, unknown>) {
     }
   }
 
+  // Local-binding so the closure below retains the narrowed non-undefined type.
+  const tweets = response.data
+
   const db = getDb()
   let articleEnvelope: TweetArticlesEnvelope = []
   if (autoCrawl) {
-    try {
-      articleEnvelope = await resolveArticlesForTweets(db, response.data)
-    } catch (err) {
-      process.stderr.write(`x-api: auto-crawl failed (user_tweets): ${err}\n`)
-    }
+    const result = await withFailureIsolation(
+      'x_get_user_tweets',
+      tweets.length,
+      () => resolveArticlesForTweets(db, tweets),
+    )
+    if (result) articleEnvelope = result
   }
 
   const articlesById = new Map<string, ArticleResolution[]>()

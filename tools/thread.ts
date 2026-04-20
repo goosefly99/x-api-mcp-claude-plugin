@@ -3,6 +3,7 @@ import type { TweetArticlesEnvelope, XTweet } from '../types.ts'
 import { getDb } from '../db/connection.ts'
 import { upsertTweets } from '../db/repos/tweets.ts'
 import { resolveArticlesForTweets, formatArticlesLines, type ArticleResolution } from '../services/auto-crawl.ts'
+import { withFailureIsolation } from '../services/handlerWrapper.ts'
 
 export async function handleGetThread(args: Record<string, unknown>) {
   const tweetId = args.tweet_id as string
@@ -121,11 +122,12 @@ export async function handleGetThread(args: Record<string, unknown>) {
   const db = getDb()
   let articleEnvelope: TweetArticlesEnvelope = []
   if (autoCrawl) {
-    try {
-      articleEnvelope = await resolveArticlesForTweets(db, allTweets)
-    } catch (err) {
-      process.stderr.write(`x-api: auto-crawl failed (thread): ${err}\n`)
-    }
+    const result = await withFailureIsolation(
+      'x_get_thread',
+      allTweets.length,
+      () => resolveArticlesForTweets(db, allTweets),
+    )
+    if (result) articleEnvelope = result
   }
 
   const articlesById = new Map<string, ArticleResolution[]>()
