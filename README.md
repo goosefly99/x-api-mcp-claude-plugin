@@ -58,6 +58,39 @@ OAuth 2.0 user tokens (for `x_get_bookmarks` and friends) are stored at
 `~/.x-tokens.json` after running `x_authorize`. This file is also gitignored
 and should never be committed.
 
+## Ecosystem version floor
+
+This plugin ships as **v0.4.0** as part of the v0.3.0 sibling ecosystem drop
+(kb 0.6.0 + yt 0.5.0 + x-api 0.4.0). The `data-etl-orchestrator` contract
+probe (probe 4, ensemble-contract) refuses to dispatch unless
+`x-api-mcp >= 0.4.0`. If you pin an older version, the orchestrator will
+emit a structured upgrade message telling the user to install v0.4.0.
+See `skills/references/contract-probe-protocol.md` in the orchestrator
+repo for the full probe.
+
+## Consumer-side every-call stderr capture (R1 mitigation)
+
+Callers MUST tee the x-api server's stderr to a log file per request —
+never fire-and-forget. v0.4.0 emits structured JSON stderr on three
+critical paths:
+
+- **Handler-layer metric row** (one per tool handler call via
+  `withFailureIsolation`): `{ plugin:'x-api', tool, articles_attempted,
+  articles_succeeded, articles_timed_out, articles_failed, elapsed_ms }`.
+- **`PLAYWRIGHT_SOFT_TIMEOUT_WIN` canary** (one per soft-timeout-wins-race
+  event — indicates a Playwright session we could not cancel mid-flight):
+  `{ plugin:'x-api', error_code:'PLAYWRIGHT_SOFT_TIMEOUT_WIN',
+  open_sockets_count, browser_context_id, tweet_id, elapsed_ms }`.
+- **SCREAMING_SNAKE_CASE `error_code`** on silent-DB-failure events (e.g.
+  `TWEET_UPSERT_CONFLICT` on composite-PK violations).
+
+Dropping stderr reopens the silent-DB-failure blind spot that probe 4
+assertion (d) was designed to close — the 100 ms stderr deadline only
+surfaces a failure if the caller is actually reading stderr. The
+orchestrator's probe 4 enforces this invariant at preflight; direct
+callers bypassing the orchestrator must replicate the stderr-tee
+discipline.
+
 ## Further documentation
 
 - [`INSTRUCTIONS.md`](./INSTRUCTIONS.md) — detailed usage, tool reference, and
