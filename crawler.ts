@@ -7,6 +7,15 @@ const PROFILE_DIR = join(homedir(), '.x-api-mcp', 'chrome-profile')
 
 let browserContext: BrowserContext | null = null
 let contextHeadless: boolean | null = null
+// Monotonic counter bumped each time a new BrowserContext is launched.
+// Exposed via getBrowserContextId() so diagnostic log lines (e.g. the
+// PLAYWRIGHT_SOFT_TIMEOUT_WIN canary in articleIngestService) can tag
+// entries with a stable-enough identity to correlate soft-timeout wins
+// with the browser session that was potentially leaked.
+// NOTE: this is a coarse identity — a true GUID tied to the Chromium
+// session would require upstream playwright-core support (deferred to
+// v0.5.0).
+let browserContextId = 0
 
 // ── Browser lifecycle ────────────────────────────────────────────
 
@@ -40,8 +49,23 @@ async function getContext(headless: boolean): Promise<BrowserContext> {
     ],
   })
   contextHeadless = headless
+  browserContextId += 1
 
   return browserContext
+}
+
+/**
+ * Returns a coarse identifier for the currently-active BrowserContext, or
+ * `'unknown'` when no context is live.  Used by the PLAYWRIGHT_SOFT_TIMEOUT_WIN
+ * canary line in `articleIngestService` so operators can correlate a
+ * soft-timeout win with the browser session that may have leaked.
+ *
+ * TODO(v0.5.0): expose a real Chromium session GUID when playwright-core
+ * upstream supports it.
+ */
+export function getBrowserContextId(): string {
+  if (!browserContext) return 'unknown'
+  return `ctx-${browserContextId}`
 }
 
 export async function closeBrowser(): Promise<void> {
