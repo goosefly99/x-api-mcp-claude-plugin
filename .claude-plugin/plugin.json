@@ -1,7 +1,7 @@
 {
   "name": "x-api-mcp-auto-dev",
   "description": "X (Twitter) API MCP server — authenticated crawler, client, and query tools",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "author": { "name": "olive" },
   "repository": "https://github.com/goosefly99/x-api-mcp-claude-plugin.git"
 }
